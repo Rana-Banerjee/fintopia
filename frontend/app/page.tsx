@@ -25,6 +25,17 @@ import {
   Legend,
   ResponsiveContainer,
 } from "recharts";
+import {
+  DndContext,
+  closestCenter,
+  DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  verticalListSortingStrategy,
+  useSortable,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 const LIQUIDITY_TYPES = [
   { value: "liquid", label: "Liquid" },
@@ -63,8 +74,37 @@ export default function Home() {
     month: number;
     year: number;
   } | null>(null);
+  const [copyFromSnapshot, setCopyFromSnapshot] = useState<string>("");
+  const [addMonthPopoverOpen, setAddMonthPopoverOpen] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [itemOrder, setItemOrder] = useState<Record<string, number[]>>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("itemOrder");
+      if (saved) return JSON.parse(saved);
+    }
+    return {};
+  });
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("expandedGroups");
+      if (saved) return JSON.parse(saved);
+    }
+    return { "asset-liquid": true, "asset-semi-liquid": true, "asset-fixed": true, "asset-retirement": true, "liability-liquid": true, "liability-fixed": true };
+  });
+  const [graphCollapsed, setGraphCollapsed] = useState(false);
+  const [visibleLines, setVisibleLines] = useState<Record<string, boolean>>({
+    netWorth: true,
+    totalAssets: true,
+    totalLiabilities: true,
+    currentAssets: true,
+    semiLiquidAssets: true,
+    retirementAssets: true,
+    propertyAssets: true,
+    liquidLiabilities: true,
+    fixedLiabilities: true,
+    netCash: true,
+  });
   const [itemForm, setItemForm] = useState({
     name: "",
     item_type: "asset",
@@ -242,22 +282,183 @@ export default function Home() {
     setSettingsOpen(true);
   }
 
+  function toggleGroup(key: string) {
+    const newState = { ...expandedGroups, [key]: !expandedGroups[key] };
+    setExpandedGroups(newState);
+    localStorage.setItem("expandedGroups", JSON.stringify(newState));
+  }
+
+  function getOrderedItems(groupItems: Item[], groupKey: string): Item[] {
+    const order = itemOrder[groupKey] || [];
+    return [...groupItems].sort((a, b) => {
+      const idxA = order.indexOf(a.id);
+      const idxB = order.indexOf(b.id);
+      if (idxA === -1 && idxB === -1) return 0;
+      if (idxA === -1) return 1;
+      if (idxB === -1) return -1;
+      return idxA - idxB;
+    });
+  }
+
+  function handleDragEnd(event: DragEndEvent, groupKey: string, groupItems: Item[]) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    let order = [...(itemOrder[groupKey] || [])];
+    
+    // Get current order based on items in this group
+    const currentItemsOrder = groupItems.map(i => i.id);
+    const hasAllItems = order.length === currentItemsOrder.length && currentItemsOrder.every(id => order.includes(id));
+    
+    if (hasAllItems && order.length > 0) {
+      // All items in order array - use exact positions
+      const oldIndex = order.indexOf(active.id as number);
+      const newIndex = order.indexOf(over.id as number);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        order.splice(oldIndex, 1);
+        order.splice(newIndex, 0, active.id as number);
+      }
+    } else {
+      // Rebuild order from current display order
+      const oldIndex = currentItemsOrder.indexOf(active.id as number);
+      const newIndex = currentItemsOrder.indexOf(over.id as number);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        order = [...currentItemsOrder];
+        order.splice(oldIndex, 1);
+        order.splice(newIndex, 0, active.id as number);
+      }
+    }
+    
+    const newItemOrder = { ...itemOrder, [groupKey]: order };
+    setItemOrder(newItemOrder);
+    localStorage.setItem("itemOrder", JSON.stringify(newItemOrder));
+  }
+
+  function SortableItem({
+    item,
+    groupKey,
+  }: {
+    item: Item;
+    groupKey: string;
+  }) {
+    const {
+      attributes,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging,
+    } = useSortable({ id: item.id });
+
+    const style = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.5 : 1,
+    };
+
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        className="flex items-center justify-between"
+      >
+        <div className="flex items-center gap-2">
+          <button
+            {...attributes}
+            {...listeners}
+            className="cursor-grab text-gray-400 hover:text-gray-600 p-1"
+            title="Drag to reorder"
+          >
+            ⋮⋮
+          </button>
+          <span>{item.name}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => handleEditItem(item)}
+            className="text-blue-600 hover:text-blue-800 mr-3"
+          >
+            Edit
+          </button>
+          <button
+            onClick={() => handleDeleteItem(item.id)}
+            className="text-red-600 hover:text-red-800"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   async function handleAddMonth() {
     const month = parseInt(currentMonth);
     const year = parseInt(currentYear);
     if (!snapshots.find((s) => s.month === month && s.year === year)) {
-      const initialValues: Record<number, number> = {};
-      items.forEach((item) => {
-        initialValues[item.id] = 0;
-      });
+      let initialValues: Record<number, number> = {};
+      
+      if (copyFromSnapshot) {
+        const [srcMonth, srcYear] = copyFromSnapshot.split("-").map(Number);
+        const srcValues = await getMonthValues(srcMonth, srcYear);
+        srcValues.forEach((v) => {
+          initialValues[v.item_id] = v.value;
+        });
+      } else {
+        [...orderedAssetItems, ...orderedLiabilityItems].forEach((item) => {
+          initialValues[item.id] = 0;
+        });
+      }
+      
       await saveMonthValues(month, year, initialValues);
       await fetchData();
       setSelectedMonthTab({ month, year });
     }
   }
 
+  async function handleCreateMonth(month: number, year: number, copyFrom: string) {
+    if (!snapshots.find((s) => s.month === month && s.year === year)) {
+      let initialValues: Record<number, number> = {};
+      
+      if (copyFrom) {
+        const [srcMonth, srcYear] = copyFrom.split("-").map(Number);
+        const srcValues = await getMonthValues(srcMonth, srcYear);
+        srcValues.forEach((v) => {
+          initialValues[v.item_id] = v.value;
+        });
+      } else {
+        [...orderedAssetItems, ...orderedLiabilityItems].forEach((item) => {
+          initialValues[item.id] = 0;
+        });
+      }
+      
+      await saveMonthValues(month, year, initialValues);
+      await fetchData();
+      setSelectedMonthTab({ month, year });
+      setAddMonthPopoverOpen(false);
+    }
+  }
+
   const assetItems = items.filter((i) => i.item_type === "asset");
   const liabilityItems = items.filter((i) => i.item_type === "liability");
+
+  const getOrderedItemsByType = (itemType: string) => {
+    const types = itemType === "asset"
+      ? ["liquid", "semi-liquid", "fixed", "retirement"]
+      : ["liquid", "fixed"];
+    return types.flatMap((l) => {
+      const groupKey = `${itemType}-${l}`;
+      const groupItems = items.filter((i) => i.item_type === itemType && i.liquidity === l);
+      return getOrderedItems(groupItems, groupKey);
+    });
+  };
+
+  const orderedAssetItems = getOrderedItemsByType("asset");
+  const orderedLiabilityItems = getOrderedItemsByType("liability");
+
+  const sortedSnapshots = [...snapshots].sort((a, b) => {
+    if (a.year !== b.year) return b.year - a.year;
+    return b.month - a.month;
+  });
 
   const chartData = snapshots.map((s, idx) => {
     const summary = chartSummaries[idx];
@@ -323,52 +524,65 @@ export default function Home() {
           <div className="space-y-6">
             {snapshots.length > 0 && (
               <div className="bg-white p-4 rounded-lg shadow">
-                <h2 className="text-lg font-semibold mb-4">
-                  Snapshot History
-                </h2>
-                <div className="h-96">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData}>
-                      <CartesianGrid strokeDasharray="3 3" />
-                      <XAxis dataKey="name" />
-                      <YAxis />
-                      <Tooltip />
-                      <Legend />
-                      <Line type="monotone" dataKey="currentAssets" name="Current Assets" stroke="#22c55e" strokeWidth={2} />
-                      <Line type="monotone" dataKey="semiLiquidAssets" name="Semi-Liquid Assets" stroke="#14b8a6" strokeWidth={2} />
-                      <Line type="monotone" dataKey="retirementAssets" name="Retirement Assets" stroke="#0ea5e9" strokeWidth={2} />
-                      <Line type="monotone" dataKey="propertyAssets" name="Property Assets" stroke="#3b82f6" strokeWidth={2} />
-                      <Line type="monotone" dataKey="totalAssets" name="Total Assets" stroke="#16a34a" strokeWidth={3} />
-                      <Line type="monotone" dataKey="liquidLiabilities" name="Liquid Liabilities" stroke="#f97316" strokeWidth={2} />
-                      <Line type="monotone" dataKey="fixedLiabilities" name="Fixed Liabilities" stroke="#ef4444" strokeWidth={2} />
-                      <Line type="monotone" dataKey="totalLiabilities" name="Total Liabilities" stroke="#dc2626" strokeWidth={3} />
-                      <Line type="monotone" dataKey="netWorth" name="Net Worth" stroke="#8b5cf6" strokeWidth={3} />
-                      <Line type="monotone" dataKey="netCash" name="Net Cash" stroke="#a855f7" strokeWidth={2} />
-                    </LineChart>
-                  </ResponsiveContainer>
+                  <button
+                    onClick={() => setGraphCollapsed(!graphCollapsed)}
+                    className="w-full flex items-center justify-between mb-4"
+                  >
+                    <h2 className="text-lg font-semibold">
+                      Snapshot History
+                    </h2>
+                    <span className="text-gray-500">{graphCollapsed ? "▼" : "▲"}</span>
+                  </button>
+                  {!graphCollapsed && (
+                    <>
+                      <div className="flex flex-wrap gap-2 mb-4">
+                        {Object.entries(visibleLines).map(([key, visible]) => (
+                          <button
+                            key={key}
+                            onClick={() => setVisibleLines(prev => ({ ...prev, [key]: !prev[key] }))}
+                            className={`px-2 py-1 text-xs rounded border ${
+                              visible
+                                ? "bg-blue-600 text-white border-blue-600"
+                                : "bg-white text-gray-500 border-gray-300"
+                            }`}
+                          >
+                            {key.replace(/([A-Z])/g, ' $1').replace(/^./, s => s.toUpperCase())}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="h-[500px]">
+                        <ResponsiveContainer width="100%" height="100%">
+                          <LineChart data={chartData}>
+                            <CartesianGrid strokeDasharray="3 3" />
+                            <XAxis dataKey="name" />
+                            <YAxis />
+                            <Tooltip offset={{ x: 10, y: -10 }} wrapperStyle={{ maxWidth: '200px' }} />
+                            <Legend />
+                            {visibleLines.netWorth && <Line type="monotone" dataKey="netWorth" name="Net Worth" stroke="#8b5cf6" strokeWidth={3} />}
+                            {visibleLines.totalAssets && <Line type="monotone" dataKey="totalAssets" name="Total Assets" stroke="#16a34a" strokeWidth={3} />}
+                            {visibleLines.totalLiabilities && <Line type="monotone" dataKey="totalLiabilities" name="Total Liabilities" stroke="#dc2626" strokeWidth={3} />}
+                            {visibleLines.currentAssets && <Line type="monotone" dataKey="currentAssets" name="Current Assets" stroke="#22c55e" strokeWidth={2} />}
+                            {visibleLines.semiLiquidAssets && <Line type="monotone" dataKey="semiLiquidAssets" name="Semi-Liquid Assets" stroke="#14b8a6" strokeWidth={2} />}
+                            {visibleLines.retirementAssets && <Line type="monotone" dataKey="retirementAssets" name="Retirement Assets" stroke="#0ea5e9" strokeWidth={2} />}
+                            {visibleLines.propertyAssets && <Line type="monotone" dataKey="propertyAssets" name="Property Assets" stroke="#3b82f6" strokeWidth={2} />}
+                            {visibleLines.liquidLiabilities && <Line type="monotone" dataKey="liquidLiabilities" name="Liquid Liabilities" stroke="#f97316" strokeWidth={2} />}
+                            {visibleLines.fixedLiabilities && <Line type="monotone" dataKey="fixedLiabilities" name="Fixed Liabilities" stroke="#ef4444" strokeWidth={2} />}
+                            {visibleLines.netCash && <Line type="monotone" dataKey="netCash" name="Net Cash" stroke="#a855f7" strokeWidth={2} />}
+                          </LineChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </>
+                  )}
                 </div>
-              </div>
             )}
 
             <div className="flex flex-wrap items-center gap-4">
-              <div className="flex items-center gap-2">
-                <input
-                  type="month"
-                  value={`${currentYear}-${currentMonth.padStart(2, "0")}`}
-                  onChange={(e) => {
-                    const [y, m] = e.target.value.split("-");
-                    setCurrentYear(y);
-                    setCurrentMonth(m);
-                  }}
-                  className="px-3 py-2 border rounded-lg"
-                />
-                <button
-                  onClick={handleAddMonth}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                >
-                  Add Month
-                </button>
-              </div>
+              <button
+                onClick={() => setAddMonthPopoverOpen(true)}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                Add Month
+              </button>
               {hasChanges && (
                 <div className="flex items-center gap-2">
                   <button
@@ -418,53 +632,74 @@ export default function Home() {
 
             {selectedMonthTab && (
               <>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="flex justify-center mb-4">
+                  <div className="bg-white p-6 rounded-lg shadow border-t-4 border-purple-600">
+                    <div className="text-sm text-gray-500 text-center">Net Worth</div>
+                    <div className="text-3xl font-bold text-purple-600">
+                      ₹{(
+                        (summary?.current_assets ?? 0) +
+                        (summary?.semi_liquid_assets ?? 0) +
+                        (summary?.retirement_assets ?? 0) +
+                        (summary?.property_assets ?? 0) -
+                        (summary?.liquid_liabilities ?? 0) -
+                        (summary?.fixed_liabilities ?? 0)
+                      ).toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Current Assets</div>
-                    <div className="text-2xl font-semibold text-gray-900">
-                      ₹{summary?.current_assets.toLocaleString('en-IN') ?? 0}
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
+                      <h3 className="text-lg font-semibold text-green-600">Assets</h3>
+                      <span className="text-lg font-bold text-green-600">
+                        ₹{(
+                          (summary?.current_assets ?? 0) +
+                          (summary?.semi_liquid_assets ?? 0) +
+                          (summary?.retirement_assets ?? 0) +
+                          (summary?.property_assets ?? 0)
+                        ).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Current</span>
+                        <span className="text-sm font-medium">₹{summary?.current_assets.toLocaleString('en-IN') ?? 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Semi-Liquid</span>
+                        <span className="text-sm font-medium">₹{summary?.semi_liquid_assets.toLocaleString('en-IN') ?? 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Retirement</span>
+                        <span className="text-sm font-medium">₹{summary?.retirement_assets.toLocaleString('en-IN') ?? 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Property</span>
+                        <span className="text-sm font-medium">₹{summary?.property_assets.toLocaleString('en-IN') ?? 0}</span>
+                      </div>
                     </div>
                   </div>
+
                   <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Semi-Liquid Assets</div>
-                    <div className="text-2xl font-semibold text-gray-900">
-                      ₹{summary?.semi_liquid_assets.toLocaleString('en-IN') ?? 0}
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
+                      <h3 className="text-lg font-semibold text-red-600">Liabilities</h3>
+                      <span className="text-lg font-bold text-red-600">
+                        ₹{(
+                          (summary?.liquid_liabilities ?? 0) +
+                          (summary?.fixed_liabilities ?? 0)
+                        ).toLocaleString('en-IN')}
+                      </span>
                     </div>
-                  </div>
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Retirement Assets</div>
-                    <div className="text-2xl font-semibold text-gray-900">
-                      ₹{summary?.retirement_assets.toLocaleString('en-IN') ?? 0}
-                    </div>
-                  </div>
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Property Assets</div>
-                    <div className="text-2xl font-semibold text-gray-900">
-                      ₹{summary?.property_assets.toLocaleString('en-IN') ?? 0}
-                    </div>
-                  </div>
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Liquid Liabilities</div>
-                    <div className="text-2xl font-semibold text-gray-900">
-                      ₹{summary?.liquid_liabilities.toLocaleString('en-IN') ?? 0}
-                    </div>
-                  </div>
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="text-sm text-gray-500">Fixed Liabilities</div>
-                    <div className="text-2xl font-semibold text-gray-900">
-                      ₹{summary?.fixed_liabilities.toLocaleString('en-IN') ?? 0}
-                    </div>
-                  </div>
-                  <div className="bg-white p-4 rounded-lg shadow border-t-2 border-green-600">
-                    <div className="text-sm text-gray-500">Total Assets</div>
-                    <div className="text-2xl font-bold text-green-600">
-                      ₹{((summary?.current_assets ?? 0) + (summary?.semi_liquid_assets ?? 0) + (summary?.retirement_assets ?? 0) + (summary?.property_assets ?? 0)).toLocaleString('en-IN')}
-                    </div>
-                  </div>
-                  <div className="bg-white p-4 rounded-lg shadow border-t-2 border-red-600">
-                    <div className="text-sm text-gray-500">Total Liabilities</div>
-                    <div className="text-2xl font-bold text-red-600">
-                      ₹{((summary?.liquid_liabilities ?? 0) + (summary?.fixed_liabilities ?? 0)).toLocaleString('en-IN')}
+                    <div className="space-y-2">
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Liquid</span>
+                        <span className="text-sm font-medium">₹{summary?.liquid_liabilities.toLocaleString('en-IN') ?? 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Fixed</span>
+                        <span className="text-sm font-medium">₹{summary?.fixed_liabilities.toLocaleString('en-IN') ?? 0}</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -473,7 +708,7 @@ export default function Home() {
                   <div className="space-y-4">
                     <h2 className="text-lg font-semibold">Assets</h2>
                     {(["liquid", "semi-liquid", "fixed", "retirement"] as const).map(group => {
-                      const items = assetItems.filter(i => i.liquidity === group);
+                      const items = orderedAssetItems.filter(i => i.liquidity === group);
                       const total = items.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
                       return (
                         <div key={group} className="bg-white p-4 rounded-lg shadow">
@@ -501,7 +736,7 @@ export default function Home() {
                   <div className="space-y-4">
                     <h2 className="text-lg font-semibold">Liabilities</h2>
                     {(["liquid", "fixed"] as const).map(group => {
-                      const items = liabilityItems.filter(i => i.liquidity === group);
+                      const items = orderedLiabilityItems.filter(i => i.liquidity === group);
                       const total = items.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
                       return (
                         <div key={group} className="bg-white p-4 rounded-lg shadow">
@@ -644,55 +879,99 @@ export default function Home() {
 
               <div>
                 <h4 className="text-lg font-medium mb-3">Defined Items</h4>
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="text-left py-2">Type</th>
-                        <th className="text-left py-2">Name</th>
-                        <th className="text-left py-2">Liquidity</th>
-                        <th className="text-right py-2">Appreciation</th>
-                        <th className="text-right py-2"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {items.map((item) => (
-                        <tr key={item.id} className="border-b">
-                          <td className="py-2 capitalize">
-                            {item.item_type}
-                          </td>
-                          <td className="py-2">{item.name}</td>
-                          <td className="py-2 capitalize">
-                            {item.liquidity?.replace("-", " ") || "-"}
-                          </td>
-                          <td className="py-2 text-right">
-                            {item.appreciation_rate
-                              ? `${item.appreciation_rate}% ${item.appreciation_frequency}`
-                              : "-"}
-                          </td>
-                          <td className="py-2 text-right">
-                            <button
-                              onClick={() => handleEditItem(item)}
-                              className="text-blue-600 hover:text-blue-800 mr-3"
-                            >
-                              Edit
-                            </button>
-                            <button
-                              onClick={() => handleDeleteItem(item.id)}
-                              className="text-red-600 hover:text-red-800"
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {items.length === 0 && (
+                {items.length === 0 ? (
                   <p className="text-gray-500 text-center py-4">
                     No items defined yet. Add your first item above.
                   </p>
+                ) : (
+                  <>
+                    <div className="mb-4">
+                      <h5 className="text-md font-semibold mb-2">Assets</h5>
+                      {(["liquid", "semi-liquid", "fixed", "retirement"] as const).map((liquidity) => {
+                        const allGroupItems = items.filter((i) => i.item_type === "asset" && i.liquidity === liquidity);
+                        if (allGroupItems.length === 0) return null;
+                        const groupKey = `asset-${liquidity}`;
+                        const groupItems = getOrderedItems(allGroupItems, groupKey);
+                        return (
+                          <div key={groupKey} className="mb-2 border rounded-lg">
+                            <button
+                              onClick={() => toggleGroup(groupKey)}
+                              className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50"
+                            >
+                              <span className="font-medium capitalize">
+                                {liquidity.replace("-", " ")} ({groupItems.length})
+                              </span>
+                              <span>{expandedGroups[groupKey] ? "▼" : "▶"}</span>
+                            </button>
+                            {expandedGroups[groupKey] && (
+                              <DndContext
+                                collisionDetection={closestCenter}
+                                onDragEnd={(e) => handleDragEnd(e, groupKey, groupItems)}
+                              >
+                                <SortableContext
+                                  items={groupItems.map((i) => i.id)}
+                                  strategy={verticalListSortingStrategy}
+                                >
+                                  <div className="border-t px-3 py-2 space-y-2">
+                                    {groupItems.map((item) => (
+                                      <SortableItem
+                                        key={item.id}
+                                        item={item}
+                                        groupKey={groupKey}
+                                      />
+                                    ))}
+                                  </div>
+                                </SortableContext>
+                              </DndContext>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div>
+                      <h5 className="text-md font-semibold mb-2">Liabilities</h5>
+                      {(["liquid", "fixed"] as const).map((liquidity) => {
+                        const allGroupItems = items.filter((i) => i.item_type === "liability" && i.liquidity === liquidity);
+                        if (allGroupItems.length === 0) return null;
+                        const groupKey = `liability-${liquidity}`;
+                        const groupItems = getOrderedItems(allGroupItems, groupKey);
+                        return (
+                          <div key={groupKey} className="mb-2 border rounded-lg">
+                            <button
+                              onClick={() => toggleGroup(groupKey)}
+                              className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50"
+                            >
+                              <span className="font-medium capitalize">
+                                {liquidity} ({groupItems.length})
+                              </span>
+                              <span>{expandedGroups[groupKey] ? "▼" : "▶"}</span>
+                            </button>
+                            {expandedGroups[groupKey] && (
+                              <DndContext
+                                collisionDetection={closestCenter}
+                                onDragEnd={(e) => handleDragEnd(e, groupKey, groupItems)}
+                              >
+                                <SortableContext
+                                  items={groupItems.map((i) => i.id)}
+                                  strategy={verticalListSortingStrategy}
+                                >
+                                  <div className="border-t px-3 py-2 space-y-2">
+                                    {groupItems.map((item) => (
+                                      <SortableItem
+                                        key={item.id}
+                                        item={item}
+                                        groupKey={groupKey}
+                                      />
+                                    ))}
+                                  </div>
+                                </SortableContext>
+                              </DndContext>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
               </div>
 
@@ -702,6 +981,85 @@ export default function Home() {
                   className="w-full px-4 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900"
                 >
                   Close
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {addMonthPopoverOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-80">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold">Add New Month</h3>
+                <button
+                  onClick={() => setAddMonthPopoverOpen(false)}
+                  className="text-gray-500 hover:text-gray-700 text-xl"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Select Month
+                </label>
+                <input
+                  type="month"
+                  value={`${currentYear}-${currentMonth.padStart(2, "0")}`}
+                  onChange={(e) => {
+                    const [y, m] = e.target.value.split("-");
+                    setCurrentYear(y);
+                    setCurrentMonth(m);
+                  }}
+                  className="w-full px-3 py-2 border rounded-lg"
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Copy values from
+                </label>
+                <div className="max-h-48 overflow-y-auto border rounded-lg">
+                  <label className="flex items-center gap-2 p-2 hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="copyFrom"
+                      value=""
+                      checked={copyFromSnapshot === ""}
+                      onChange={() => setCopyFromSnapshot("")}
+                      className="mr-2"
+                    />
+                    <span>Empty month</span>
+                  </label>
+                  {sortedSnapshots.map((s) => (
+                    <label
+                      key={`${s.month}-${s.year}`}
+                      className="flex items-center gap-2 p-2 hover:bg-gray-50 cursor-pointer"
+                    >
+                      <input
+                        type="radio"
+                        name="copyFrom"
+                        value={`${s.month}-${s.year}`}
+                        checked={copyFromSnapshot === `${s.month}-${s.year}`}
+                        onChange={() => setCopyFromSnapshot(`${s.month}-${s.year}`)}
+                        className="mr-2"
+                      />
+                      <span>{s.month}/{s.year}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setAddMonthPopoverOpen(false)}
+                  className="flex-1 px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => handleCreateMonth(parseInt(currentMonth), parseInt(currentYear), copyFromSnapshot)}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                >
+                  Create Month
                 </button>
               </div>
             </div>

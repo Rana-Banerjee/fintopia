@@ -11,9 +11,10 @@ Monorepo with two apps:
 
 ```bash
 # Frontend
-cd frontend && npm run dev      # dev server on :3000
-cd frontend && npm run build  # production build
-cd frontend && npm run lint   # eslint
+cd frontend && npm run dev           # dev server on :3000
+cd frontend && npm run build         # production build
+cd frontend && npm run lint          # eslint
+cd frontend && npx tsc --noEmit      # typecheck (no typecheck script in package.json)
 
 # Backend
 cd backend && python -m uvicorn main:app --reload  # dev server on :8000
@@ -40,7 +41,11 @@ None configured. Add tests if needed.
 
 - `backend/main.py` - FastAPI app, all endpoints
 - `backend/database.py` - SQLAlchemy engine, session, Base
-- `backend/models.py` - SQLAlchemy models (Item, MonthValue)
+- `backend/models.py` - SQLAlchemy models (Item, MonthValue, IncomeExpense, IncomeExpenseValue)
 - `backend/schemas.py` - Pydantic schemas
 - `frontend/app/page.tsx` - Main UI component
 - `frontend/lib/api.ts` - Backend API client
+
+## Database
+
+- Migrations run via raw SQL ALTER TABLE statements in `main.py:19-30` on every backend startup. New tables are created automatically via SQLAlchemy `Base.metadata.create_all()`.

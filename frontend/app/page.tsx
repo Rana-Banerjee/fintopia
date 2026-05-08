@@ -11,9 +11,16 @@ import {
   getSnapshots,
   deleteSnapshot,
   getSummary,
+  getIncomeExpenses,
+  createIncomeExpense,
+  deleteIncomeExpense,
+  updateIncomeExpense,
+  getIncomeExpenseValues,
   Item,
+  IncomeExpense,
   Summary,
   Snapshot,
+  FREQUENCY_OPTIONS,
 } from "@/lib/api";
 import {
   LineChart,
@@ -61,6 +68,22 @@ export default function Home() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [chartSummaries, setChartSummaries] = useState<Summary[]>([]);
+
+  const [incomeExpenses, setIncomeExpenses] = useState<IncomeExpense[]>([]);
+  const [ieForm, setIeForm] = useState({
+    name: "",
+    ie_type: "income",
+    frequency: "monthly",
+    appreciation_rate: "",
+    appreciation_frequency: "monthly",
+    start_month: "",
+    start_year: "",
+    end_month: "",
+    end_year: "",
+    order: 0,
+  });
+  const [editingIeId, setEditingIeId] = useState<number | null>(null);
+  const [ieValues, setIeValues] = useState<Record<number, number>>({});
 
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
@@ -124,16 +147,19 @@ export default function Home() {
   useEffect(() => {
     if (selectedMonthTab) {
       loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
+      loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
     }
-  }, [selectedMonthTab, items]);
+  }, [selectedMonthTab, incomeExpenses]);
 
   async function fetchData() {
-    const [itemsData, snapshotsData] = await Promise.all([
+    const [itemsData, snapshotsData, ieData] = await Promise.all([
       getItems(),
       getSnapshots(),
+      getIncomeExpenses(),
     ]);
     setItems(itemsData);
     setSnapshots(snapshotsData);
+    setIncomeExpenses(ieData);
 
     const summaries = await Promise.all(
       snapshotsData.map((s) => getSummary(s.month, s.year))
@@ -146,9 +172,19 @@ export default function Home() {
 
     if (selectedMonthTab) {
       loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
+      loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
     } else if (snapshotsData.length > 0) {
       setSelectedMonthTab(snapshotsData[0]);
     }
+  }
+
+  async function loadIeValues(month: number, year: number) {
+    const values = await getIncomeExpenseValues(month, year);
+    const valueMap: Record<number, number> = {};
+    values.forEach((v) => {
+      valueMap[v.item_id] = v.value;
+    });
+    setIeValues(valueMap);
   }
 
   async function loadMonthValues(month: number, year: number) {
@@ -240,6 +276,85 @@ export default function Home() {
       liquidity: "liquid",
       appreciation_rate: "",
       appreciation_frequency: "monthly",
+    });
+  }
+
+  function handleIeChange(field: string, value: string) {
+    setIeForm({ ...ieForm, [field]: value });
+  }
+
+  async function handleSaveIe(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ieForm.name) return;
+
+    const payload = {
+      name: ieForm.name,
+      ie_type: ieForm.ie_type,
+      frequency: ieForm.frequency,
+      appreciation_rate: ieForm.appreciation_rate ? parseFloat(ieForm.appreciation_rate) : null,
+      appreciation_frequency: ieForm.appreciation_rate && ieForm.appreciation_frequency ? ieForm.appreciation_frequency : null,
+      start_month: ieForm.start_month ? parseInt(ieForm.start_month) : null,
+      start_year: ieForm.start_year ? parseInt(ieForm.start_year) : null,
+      end_month: ieForm.end_month ? parseInt(ieForm.end_month) : null,
+      end_year: ieForm.end_year ? parseInt(ieForm.end_year) : null,
+      order: ieForm.order,
+    };
+
+    if (editingIeId !== null) {
+      await updateIncomeExpense(editingIeId, payload);
+      handleCancelIeEdit();
+    } else {
+      await createIncomeExpense(payload);
+      setIeForm({
+        name: "",
+        ie_type: "income",
+        frequency: "monthly",
+        appreciation_rate: "",
+        appreciation_frequency: "monthly",
+        start_month: "",
+        start_year: "",
+        end_month: "",
+        end_year: "",
+        order: 0,
+      });
+    }
+    fetchData();
+  }
+
+  async function handleDeleteIe(id: number) {
+    await deleteIncomeExpense(id);
+    fetchData();
+  }
+
+  function handleEditIe(ie: IncomeExpense) {
+    setEditingIeId(ie.id);
+    setIeForm({
+      name: ie.name,
+      ie_type: ie.ie_type,
+      frequency: ie.frequency,
+      appreciation_rate: ie.appreciation_rate?.toString() || "",
+      appreciation_frequency: ie.appreciation_frequency || "monthly",
+      start_month: ie.start_month?.toString() || "",
+      start_year: ie.start_year?.toString() || "",
+      end_month: ie.end_month?.toString() || "",
+      end_year: ie.end_year?.toString() || "",
+      order: ie.order,
+    });
+  }
+
+  function handleCancelIeEdit() {
+    setEditingIeId(null);
+    setIeForm({
+      name: "",
+      ie_type: "income",
+      frequency: "monthly",
+      appreciation_rate: "",
+      appreciation_frequency: "monthly",
+      start_month: "",
+      start_year: "",
+      end_month: "",
+      end_year: "",
+      order: 0,
     });
   }
 
@@ -632,10 +747,10 @@ export default function Home() {
 
             {selectedMonthTab && (
               <>
-                <div className="flex justify-center mb-4">
-                  <div className="bg-white p-6 rounded-lg shadow border-t-4 border-purple-600">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                  <div className="bg-white p-4 rounded-lg shadow border-t-4 border-purple-600">
                     <div className="text-sm text-gray-500 text-center">Net Worth</div>
-                    <div className="text-3xl font-bold text-purple-600">
+                    <div className="text-2xl font-bold text-purple-600 text-center">
                       ₹{(
                         (summary?.current_assets ?? 0) +
                         (summary?.semi_liquid_assets ?? 0) +
@@ -644,6 +759,25 @@ export default function Home() {
                         (summary?.liquid_liabilities ?? 0) -
                         (summary?.fixed_liabilities ?? 0)
                       ).toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                  <div className="bg-white p-4 rounded-lg shadow border-t-4 border-blue-600">
+                    <div className="text-sm text-gray-500 text-center">Income / Expense</div>
+                    <div className="text-xl font-bold text-blue-600 text-center">
+                      <span className="text-green-600">+₹{(summary?.total_income ?? 0).toLocaleString('en-IN')}</span>
+                      <span className="text-gray-400 mx-1">/</span>
+                      <span className="text-red-600">-₹{(summary?.total_expense ?? 0).toLocaleString('en-IN')}</span>
+                    </div>
+                    <div className="text-center mt-1">
+                      <span className={`text-sm font-medium ${(summary?.net_cashflow ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        Net: ₹{(summary?.net_cashflow ?? 0).toLocaleString('en-IN')}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="bg-white p-4 rounded-lg shadow border-t-4 border-indigo-600">
+                    <div className="text-sm text-gray-500 text-center">Net Cash</div>
+                    <div className="text-2xl font-bold text-indigo-600 text-center">
+                      ₹{(summary?.net_cash ?? 0).toLocaleString('en-IN')}
                     </div>
                   </div>
                 </div>
@@ -970,6 +1104,167 @@ export default function Home() {
                           </div>
                         );
                       })}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="mb-6 pt-4 border-t">
+                <h4 className="text-lg font-medium mb-3">
+                  {editingIeId ? "Edit Income/Expense" : "Add Income/Expense"}
+                </h4>
+                <form onSubmit={handleSaveIe} className="space-y-3">
+                  <div className="flex flex-wrap gap-3">
+                    <select
+                      value={ieForm.ie_type}
+                      onChange={(e) => handleIeChange("ie_type", e.target.value)}
+                      className="px-3 py-2 border rounded-lg"
+                    >
+                      <option value="income">Income</option>
+                      <option value="expense">Expense</option>
+                    </select>
+                    <input
+                      type="text"
+                      placeholder="Name"
+                      value={ieForm.name}
+                      onChange={(e) => handleIeChange("name", e.target.value)}
+                      className="px-3 py-2 border rounded-lg flex-1 min-w-[150px]"
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <select
+                      value={ieForm.frequency}
+                      onChange={(e) => handleIeChange("frequency", e.target.value)}
+                      className="px-3 py-2 border rounded-lg"
+                    >
+                      {FREQUENCY_OPTIONS.map((f) => (
+                        <option key={f.value} value={f.value}>
+                          {f.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="number"
+                      placeholder="Appreciation Rate (%)"
+                      value={ieForm.appreciation_rate}
+                      onChange={(e) => handleIeChange("appreciation_rate", e.target.value)}
+                      className="px-3 py-2 border rounded-lg w-48"
+                    />
+                    {ieForm.appreciation_rate && (
+                      <select
+                        value={ieForm.appreciation_frequency}
+                        onChange={(e) => handleIeChange("appreciation_frequency", e.target.value)}
+                        className="px-3 py-2 border rounded-lg"
+                      >
+                        {APPRECIATION_FREQUENCIES.map((f) => (
+                          <option key={f.value} value={f.value}>
+                            {f.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <div className="flex gap-1 items-center">
+                      <span className="text-sm text-gray-600">Start:</span>
+                      <input
+                        type="number"
+                        placeholder="Month"
+                        value={ieForm.start_month}
+                        onChange={(e) => handleIeChange("start_month", e.target.value)}
+                        className="px-2 py-1 border rounded-lg w-16"
+                        min={1}
+                        max={12}
+                      />
+                      <input
+                        type="number"
+                        placeholder="Year"
+                        value={ieForm.start_year}
+                        onChange={(e) => handleIeChange("start_year", e.target.value)}
+                        className="px-2 py-1 border rounded-lg w-20"
+                      />
+                    </div>
+                    <div className="flex gap-1 items-center">
+                      <span className="text-sm text-gray-600">End:</span>
+                      <input
+                        type="number"
+                        placeholder="Month"
+                        value={ieForm.end_month}
+                        onChange={(e) => handleIeChange("end_month", e.target.value)}
+                        className="px-2 py-1 border rounded-lg w-16"
+                        min={1}
+                        max={12}
+                      />
+                      <input
+                        type="number"
+                        placeholder="Year"
+                        value={ieForm.end_year}
+                        onChange={(e) => handleIeChange("end_year", e.target.value)}
+                        className="px-2 py-1 border rounded-lg w-20"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="submit"
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                    >
+                      {editingIeId ? "Update" : "Add"}
+                    </button>
+                    {editingIeId && (
+                      <button
+                        type="button"
+                        onClick={handleCancelIeEdit}
+                        className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                </form>
+              </div>
+
+              <div className="mb-6">
+                <h4 className="text-lg font-medium mb-3">Defined Income/Expenses</h4>
+                {incomeExpenses.length === 0 ? (
+                  <p className="text-gray-500 text-center py-4">
+                    No income/expenses defined yet. Add your first one above.
+                  </p>
+                ) : (
+                  <>
+                    <div className="mb-4">
+                      <h5 className="text-md font-semibold mb-2">Income</h5>
+                      {incomeExpenses.filter((i) => i.ie_type === "income").map((ie) => (
+                        <div key={ie.id} className="flex items-center justify-between px-3 py-2 border rounded mb-2">
+                          <div>
+                            <span className="font-medium">{ie.name}</span>
+                            <span className="text-sm text-gray-500 ml-2">
+                              ({FREQUENCY_OPTIONS.find((f) => f.value === ie.frequency)?.label})
+                            </span>
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => handleEditIe(ie)} className="text-blue-600 hover:text-blue-800 text-sm">Edit</button>
+                            <button onClick={() => handleDeleteIe(ie.id)} className="text-red-600 hover:text-red-800 text-sm">Delete</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div>
+                      <h5 className="text-md font-semibold mb-2">Expenses</h5>
+                      {incomeExpenses.filter((i) => i.ie_type === "expense").map((ie) => (
+                        <div key={ie.id} className="flex items-center justify-between px-3 py-2 border rounded mb-2">
+                          <div>
+                            <span className="font-medium">{ie.name}</span>
+                            <span className="text-sm text-gray-500 ml-2">
+                              ({FREQUENCY_OPTIONS.find((f) => f.value === ie.frequency)?.label})
+                            </span>
+                          </div>
+                          <div className="flex gap-2">
+                            <button onClick={() => handleEditIe(ie)} className="text-blue-600 hover:text-blue-800 text-sm">Edit</button>
+                            <button onClick={() => handleDeleteIe(ie.id)} className="text-red-600 hover:text-red-800 text-sm">Delete</button>
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   </>
                 )}

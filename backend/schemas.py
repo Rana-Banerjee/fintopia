@@ -8,6 +8,10 @@ class ItemBase(BaseModel):
     liquidity: Optional[str] = None
     appreciation_rate: Optional[float] = None
     appreciation_frequency: Optional[str] = None
+    start_month: Optional[int] = None
+    start_year: Optional[int] = None
+    end_month: Optional[int] = None
+    end_year: Optional[int] = None
 
 
 class ItemCreate(ItemBase):
@@ -54,3 +58,54 @@ class Summary(BaseModel):
     retirement_assets: float
     property_assets: float
     fixed_liabilities: float
+    total_income: float
+    total_expense: float
+    net_cashflow: float
+
+
+class IncomeExpenseBase(BaseModel):
+    name: str
+    ie_type: str
+    frequency: str
+    appreciation_rate: Optional[float] = None
+    appreciation_frequency: Optional[str] = None
+    start_month: Optional[int] = None
+    start_year: Optional[int] = None
+    end_month: Optional[int] = None
+    end_year: Optional[int] = None
+    order: int = 0
+
+
+class IncomeExpenseCreate(IncomeExpenseBase):
+    pass
+
+
+class IncomeExpense(IncomeExpenseBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
+class IncomeExpenseValueBase(BaseModel):
+    month: int
+    year: int
+    item_id: int
+    value: float
+
+
+class IncomeExpenseValueCreate(IncomeExpenseValueBase):
+    pass
+
+
+class IncomeExpenseValue(IncomeExpenseValueBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
+class IncomeExpenseValuesResponse(BaseModel):
+    month: int
+    year: int
+    values: list[dict]

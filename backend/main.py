@@ -173,8 +173,10 @@ def applies_this_month(item, month):
     freq = item.frequency
     if freq == "monthly":
         return True
+    elif freq == "bi_monthly":
+        return month % 2 == 0
     elif freq == "quarterly":
-        return month in [4, 7, 10, 12]
+        return month in [1, 4, 7, 10]
     elif freq == "semi_annual":
         return month in [4, 10]
     elif freq == "yearly":

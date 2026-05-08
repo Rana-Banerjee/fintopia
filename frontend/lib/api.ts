@@ -110,6 +110,7 @@ export async function getSummary(month: number, year: number): Promise<Summary> 
 
 export const FREQUENCY_OPTIONS = [
   { value: "monthly", label: "Monthly" },
+  { value: "bi_monthly", label: "Bi-Monthly" },
   { value: "quarterly", label: "Quarterly" },
   { value: "semi_annual", label: "Semi-Annually" },
   { value: "yearly", label: "Yearly" },

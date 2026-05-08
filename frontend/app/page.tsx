@@ -376,6 +376,15 @@ export default function Home() {
     setHasChanges(true);
   }
 
+  function isIeApplicable(frequency: string, month: number): boolean {
+    if (frequency === "monthly") return true;
+    if (frequency === "bi_monthly") return month % 2 === 0;
+    if (frequency === "quarterly") return [1, 4, 7, 10].includes(month);
+    if (frequency === "semi_annual") return [4, 10].includes(month);
+    if (frequency === "yearly") return month === 4;
+    return true;
+  }
+
   async function handleSaveIeValues() {
     if (!selectedMonthTab) return;
     await saveIncomeExpenseValues(
@@ -1011,22 +1020,25 @@ export default function Home() {
                     </div>
                     {expandedSections.income && (
                       <div className="space-y-2">
-                        {incomeExpenses.filter(i => i.ie_type === "income").map(ie => {
-                          const total = ieValues[ie.id] ?? 0;
-                          return (
-                            <div key={ie.id} className="flex items-center gap-2">
-                              <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
-                              <span className="text-xs text-gray-500">{FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label}</span>
-                              <input
-                                type="number"
-                                value={ieValues[ie.id] ?? 0}
-                                onChange={e => handleIeValueChange(ie.id, e.target.value)}
-                                className="w-28 px-2 py-1 border rounded text-right text-sm"
-                              />
-                            </div>
-                          );
-                        })}
-                        {incomeExpenses.filter(i => i.ie_type === "income").length === 0 && (
+                        {(() => {
+                          const filtered = incomeExpenses.filter(i => i.ie_type === "income" && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1));
+                          return filtered.map(ie => {
+                            const total = ieValues[ie.id] ?? 0;
+                            return (
+                              <div key={ie.id} className="flex items-center gap-2">
+                                <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
+                                <span className="text-xs text-gray-500">{FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label}</span>
+                                <input
+                                  type="number"
+                                  value={ieValues[ie.id] ?? 0}
+                                  onChange={e => handleIeValueChange(ie.id, e.target.value)}
+                                  className="w-28 px-2 py-1 border rounded text-right text-sm"
+                                />
+                              </div>
+                            );
+                          });
+                        })()}
+                        {incomeExpenses.filter(i => i.ie_type === "income" && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1)).length === 0 && (
                           <p className="text-sm text-gray-500">No income items defined. Add in Settings.</p>
                         )}
                       </div>
@@ -1050,22 +1062,25 @@ export default function Home() {
                     </div>
                     {expandedSections.expenses && (
                       <div className="space-y-2">
-                        {incomeExpenses.filter(i => i.ie_type === "expense").map(ie => {
-                          const total = ieValues[ie.id] ?? 0;
-                          return (
-                            <div key={ie.id} className="flex items-center gap-2">
-                              <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
-                              <span className="text-xs text-gray-500">{FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label}</span>
-                              <input
-                                type="number"
-                                value={ieValues[ie.id] ?? 0}
-                                onChange={e => handleIeValueChange(ie.id, e.target.value)}
-                                className="w-28 px-2 py-1 border rounded text-right text-sm"
-                              />
-                            </div>
-                          );
-                        })}
-                        {incomeExpenses.filter(i => i.ie_type === "expense").length === 0 && (
+                        {(() => {
+                          const filtered = incomeExpenses.filter(i => i.ie_type === "expense" && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1));
+                          return filtered.map(ie => {
+                            const total = ieValues[ie.id] ?? 0;
+                            return (
+                              <div key={ie.id} className="flex items-center gap-2">
+                                <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
+                                <span className="text-xs text-gray-500">{FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label}</span>
+                                <input
+                                  type="number"
+                                  value={ieValues[ie.id] ?? 0}
+                                  onChange={e => handleIeValueChange(ie.id, e.target.value)}
+                                  className="w-28 px-2 py-1 border rounded text-right text-sm"
+                                />
+                              </div>
+                            );
+                          });
+                        })()}
+                        {incomeExpenses.filter(i => i.ie_type === "expense" && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1)).length === 0 && (
                           <p className="text-sm text-gray-500">No expense items defined. Add in Settings.</p>
                         )}
                       </div>

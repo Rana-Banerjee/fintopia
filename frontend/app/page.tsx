@@ -16,6 +16,7 @@ import {
   deleteIncomeExpense,
   updateIncomeExpense,
   getIncomeExpenseValues,
+  saveIncomeExpenseValues,
   Item,
   IncomeExpense,
   Summary,
@@ -115,6 +116,12 @@ export default function Home() {
       if (saved) return JSON.parse(saved);
     }
     return { "asset-liquid": true, "asset-semi-liquid": true, "asset-fixed": true, "asset-retirement": true, "liability-liquid": true, "liability-fixed": true };
+  });
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    assets: true,
+    liabilities: true,
+    income: true,
+    expenses: true,
   });
   const [graphCollapsed, setGraphCollapsed] = useState(false);
   const [visibleLines, setVisibleLines] = useState<Record<string, boolean>>({
@@ -364,13 +371,28 @@ export default function Home() {
     setHasChanges(true);
   }
 
-  async function handleSaveMonthValues() {
+  function handleIeValueChange(itemId: number, value: string) {
+    setIeValues({ ...ieValues, [itemId]: parseFloat(value) || 0 });
+    setHasChanges(true);
+  }
+
+  async function handleSaveIeValues() {
     if (!selectedMonthTab) return;
-    await saveMonthValues(
+    await saveIncomeExpenseValues(
       selectedMonthTab.month,
       selectedMonthTab.year,
-      monthValues
+      ieValues
     );
+    setHasChanges(false);
+    fetchData();
+  }
+
+  async function handleSaveMonthValues() {
+    if (!selectedMonthTab) return;
+    await Promise.all([
+      saveMonthValues(selectedMonthTab.month, selectedMonthTab.year, monthValues),
+      saveIncomeExpenseValues(selectedMonthTab.month, selectedMonthTab.year, ieValues),
+    ]);
     setHasChanges(false);
     fetchData();
   }
@@ -378,6 +400,7 @@ export default function Home() {
   function handleCancelMonthEdit() {
     if (!selectedMonthTab) return;
     loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
+    loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
   }
 
   async function handleDeleteSnapshot(month: number, year: number) {
@@ -400,6 +423,32 @@ export default function Home() {
 
   function toggleGroup(key: string) {
     const newState = { ...expandedGroups, [key]: !expandedGroups[key] };
+    setExpandedGroups(newState);
+    localStorage.setItem("expandedGroups", JSON.stringify(newState));
+  }
+
+  function toggleSection(key: string) {
+    setExpandedSections({ ...expandedSections, [key]: !expandedSections[key] });
+  }
+
+  function expandAllSections() {
+    setExpandedSections({ assets: true, liabilities: true, income: true, expenses: true });
+  }
+
+  function collapseAllSections() {
+    setExpandedSections({ assets: false, liabilities: false, income: false, expenses: false });
+  }
+
+  function expandAllGroups(keys: string[]) {
+    const newState = { ...expandedGroups };
+    keys.forEach(key => { newState[key] = true; });
+    setExpandedGroups(newState);
+    localStorage.setItem("expandedGroups", JSON.stringify(newState));
+  }
+
+  function collapseAllGroups(keys: string[]) {
+    const newState = { ...expandedGroups };
+    keys.forEach(key => { newState[key] = false; });
     setExpandedGroups(newState);
     localStorage.setItem("expandedGroups", JSON.stringify(newState));
   }
@@ -763,16 +812,9 @@ export default function Home() {
                     </div>
                   </div>
                   <div className="bg-white p-4 rounded-lg shadow border-t-4 border-blue-600">
-                    <div className="text-sm text-gray-500 text-center">Income / Expense</div>
-                    <div className="text-xl font-bold text-blue-600 text-center">
-                      <span className="text-green-600">+₹{(summary?.total_income ?? 0).toLocaleString('en-IN')}</span>
-                      <span className="text-gray-400 mx-1">/</span>
-                      <span className="text-red-600">-₹{(summary?.total_expense ?? 0).toLocaleString('en-IN')}</span>
-                    </div>
-                    <div className="text-center mt-1">
-                      <span className={`text-sm font-medium ${(summary?.net_cashflow ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                        Net: ₹{(summary?.net_cashflow ?? 0).toLocaleString('en-IN')}
-                      </span>
+                    <div className="text-sm text-gray-500 text-center">Net Cash Flow</div>
+                    <div className={`text-2xl font-bold text-center ${(summary?.net_cashflow ?? 0) >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      ₹{(summary?.net_cashflow ?? 0).toLocaleString('en-IN')}
                     </div>
                   </div>
                   <div className="bg-white p-4 rounded-lg shadow border-t-4 border-indigo-600">
@@ -841,60 +883,193 @@ export default function Home() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-4">
-                    <h2 className="text-lg font-semibold">Assets</h2>
+                    <div className="flex justify-between items-center">
+                      <h2 className="text-lg font-semibold">Assets</h2>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => expandAllGroups(["asset-liquid", "asset-semi-liquid", "asset-fixed", "asset-retirement"])}
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                        >
+                          Expand
+                        </button>
+                        <button
+                          onClick={() => collapseAllGroups(["asset-liquid", "asset-semi-liquid", "asset-fixed", "asset-retirement"])}
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                        >
+                          Collapse
+                        </button>
+                      </div>
+                    </div>
                     {(["liquid", "semi-liquid", "fixed", "retirement"] as const).map(group => {
+                      const groupKey = `asset-${group}`;
                       const items = orderedAssetItems.filter(i => i.liquidity === group);
                       const total = items.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
+                      const isExpanded = expandedGroups[groupKey] ?? true;
                       return (
                         <div key={group} className="bg-white p-4 rounded-lg shadow">
-                          <div className="flex justify-between items-center mb-2">
+                          <button
+                            onClick={() => toggleGroup(groupKey)}
+                            className="w-full flex justify-between items-center mb-2"
+                          >
                             <span className="font-medium capitalize">{group.replace("-", " ")}</span>
-                            <span className="text-sm text-gray-600">₹{total.toLocaleString('en-IN')}</span>
-                          </div>
-                          <div className="space-y-2">
-                            {items.map(item => (
-                              <div key={item.id} className="flex items-center gap-2">
-                                <label className="flex-1 text-sm text-gray-700">{item.name}</label>
-                                <input
-                                  type="number"
-                                  value={monthValues[item.id] ?? 0}
-                                  onChange={e => handleValueChange(item.id, e.target.value)}
-                                  className="w-28 px-2 py-1 border rounded text-right text-sm"
-                                />
-                              </div>
-                            ))}
-                          </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm text-gray-600">₹{total.toLocaleString('en-IN')}</span>
+                              <span className="text-gray-400">{isExpanded ? "▼" : "▶"}</span>
+                            </div>
+                          </button>
+                          {isExpanded && (
+                            <div className="space-y-2">
+                              {items.map(item => (
+                                <div key={item.id} className="flex items-center gap-2">
+                                  <label className="flex-1 text-sm text-gray-700">{item.name}</label>
+                                  <input
+                                    type="number"
+                                    value={monthValues[item.id] ?? 0}
+                                    onChange={e => handleValueChange(item.id, e.target.value)}
+                                    className="w-28 px-2 py-1 border rounded text-right text-sm"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
                   </div>
                   <div className="space-y-4">
-                    <h2 className="text-lg font-semibold">Liabilities</h2>
+                    <div className="flex justify-between items-center">
+                      <h2 className="text-lg font-semibold">Liabilities</h2>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => expandAllGroups(["liability-liquid", "liability-fixed"])}
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                        >
+                          Expand
+                        </button>
+                        <button
+                          onClick={() => collapseAllGroups(["liability-liquid", "liability-fixed"])}
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                        >
+                          Collapse
+                        </button>
+                      </div>
+                    </div>
                     {(["liquid", "fixed"] as const).map(group => {
+                      const groupKey = `liability-${group}`;
                       const items = orderedLiabilityItems.filter(i => i.liquidity === group);
                       const total = items.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
+                      const isExpanded = expandedGroups[groupKey] ?? true;
                       return (
                         <div key={group} className="bg-white p-4 rounded-lg shadow">
-                          <div className="flex justify-between items-center mb-2">
+                          <button
+                            onClick={() => toggleGroup(groupKey)}
+                            className="w-full flex justify-between items-center mb-2"
+                          >
                             <span className="font-medium capitalize">{group}</span>
-                            <span className="text-sm text-gray-600">₹{total.toLocaleString('en-IN')}</span>
-                          </div>
-                          <div className="space-y-2">
-                            {items.map(item => (
-                              <div key={item.id} className="flex items-center gap-2">
-                                <label className="flex-1 text-sm text-gray-700">{item.name}</label>
-                                <input
-                                  type="number"
-                                  value={monthValues[item.id] ?? 0}
-                                  onChange={e => handleValueChange(item.id, e.target.value)}
-                                  className="w-28 px-2 py-1 border rounded text-right text-sm"
-                                />
-                              </div>
-                            ))}
-                          </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm text-gray-600">₹{total.toLocaleString('en-IN')}</span>
+                              <span className="text-gray-400">{isExpanded ? "▼" : "▶"}</span>
+                            </div>
+                          </button>
+                          {isExpanded && (
+                            <div className="space-y-2">
+                              {items.map(item => (
+                                <div key={item.id} className="flex items-center gap-2">
+                                  <label className="flex-1 text-sm text-gray-700">{item.name}</label>
+                                  <input
+                                    type="number"
+                                    value={monthValues[item.id] ?? 0}
+                                    onChange={e => handleValueChange(item.id, e.target.value)}
+                                    className="w-28 px-2 py-1 border rounded text-right text-sm"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+
+                <div className="space-y-4 mt-6">
+                  <div className="bg-white p-4 rounded-lg shadow">
+                    <div className="flex justify-between items-center mb-4">
+                      <button
+                        onClick={() => toggleSection("income")}
+                        className="flex items-center gap-2 text-lg font-semibold"
+                      >
+                        <span>{expandedSections.income ? "▼" : "▶"}</span>
+                        Income
+                      </button>
+                      <button
+                        onClick={expandedSections.income ? () => collapseAllGroups(["income-income"]) : () => expandAllGroups(["income-income"])}
+                        className="text-sm text-blue-600 hover:text-blue-800"
+                      >
+                        {expandedSections.income && expandedGroups["income-income"] ? "Collapse" : "Expand"}
+                      </button>
+                    </div>
+                    {expandedSections.income && (
+                      <div className="space-y-2">
+                        {incomeExpenses.filter(i => i.ie_type === "income").map(ie => {
+                          const total = ieValues[ie.id] ?? 0;
+                          return (
+                            <div key={ie.id} className="flex items-center gap-2">
+                              <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
+                              <span className="text-xs text-gray-500">{FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label}</span>
+                              <input
+                                type="number"
+                                value={ieValues[ie.id] ?? 0}
+                                onChange={e => handleIeValueChange(ie.id, e.target.value)}
+                                className="w-28 px-2 py-1 border rounded text-right text-sm"
+                              />
+                            </div>
+                          );
+                        })}
+                        {incomeExpenses.filter(i => i.ie_type === "income").length === 0 && (
+                          <p className="text-sm text-gray-500">No income items defined. Add in Settings.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="bg-white p-4 rounded-lg shadow">
+                    <div className="flex justify-between items-center mb-4">
+                      <button
+                        onClick={() => toggleSection("expenses")}
+                        className="flex items-center gap-2 text-lg font-semibold"
+                      >
+                        <span>{expandedSections.expenses ? "▼" : "▶"}</span>
+                        Expenses
+                      </button>
+                      <button
+                        onClick={expandedSections.expenses ? () => collapseAllGroups(["income-expense"]) : () => expandAllGroups(["income-expense"])}
+                        className="text-sm text-blue-600 hover:text-blue-800"
+                      >
+                        {expandedSections.expenses && expandedGroups["income-expense"] ? "Collapse" : "Expand"}
+                      </button>
+                    </div>
+                    {expandedSections.expenses && (
+                      <div className="space-y-2">
+                        {incomeExpenses.filter(i => i.ie_type === "expense").map(ie => {
+                          const total = ieValues[ie.id] ?? 0;
+                          return (
+                            <div key={ie.id} className="flex items-center gap-2">
+                              <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
+                              <span className="text-xs text-gray-500">{FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label}</span>
+                              <input
+                                type="number"
+                                value={ieValues[ie.id] ?? 0}
+                                onChange={e => handleIeValueChange(ie.id, e.target.value)}
+                                className="w-28 px-2 py-1 border rounded text-right text-sm"
+                              />
+                            </div>
+                          );
+                        })}
+                        {incomeExpenses.filter(i => i.ie_type === "expense").length === 0 && (
+                          <p className="text-sm text-gray-500">No expense items defined. Add in Settings.</p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               </>

@@ -101,6 +101,7 @@ export default function Home() {
   const [addMonthPopoverOpen, setAddMonthPopoverOpen] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<"assets" | "income">("assets");
   const [itemOrder, setItemOrder] = useState<Record<string, number[]>>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("itemOrder");
@@ -510,7 +511,7 @@ export default function Home() {
     const month = parseInt(currentMonth);
     const year = parseInt(currentYear);
     if (!snapshots.find((s) => s.month === month && s.year === year)) {
-      let initialValues: Record<number, number> = {};
+      const initialValues: Record<number, number> = {};
       
       if (copyFromSnapshot) {
         const [srcMonth, srcYear] = copyFromSnapshot.split("-").map(Number);
@@ -532,7 +533,7 @@ export default function Home() {
 
   async function handleCreateMonth(month: number, year: number, copyFrom: string) {
     if (!snapshots.find((s) => s.month === month && s.year === year)) {
-      let initialValues: Record<number, number> = {};
+      const initialValues: Record<number, number> = {};
       
       if (copyFrom) {
         const [srcMonth, srcYear] = copyFrom.split("-").map(Number);
@@ -925,7 +926,30 @@ export default function Home() {
                 </button>
               </div>
 
-              <div className="mb-6">
+              <div className="flex border-b mb-4">
+                <button
+                  onClick={() => setSettingsTab("assets")}
+                  className={`px-4 py-2 font-medium ${
+                    settingsTab === "assets"
+                      ? "border-b-2 border-blue-600 text-blue-600"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  Assets & Liabilities
+                </button>
+                <button
+                  onClick={() => setSettingsTab("income")}
+                  className={`px-4 py-2 font-medium ${
+                    settingsTab === "income"
+                      ? "border-b-2 border-blue-600 text-blue-600"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  Income & Expenses
+                </button>
+              </div>
+
+              <div className={`mb-6 ${settingsTab !== "assets" ? "hidden" : ""}`}>
                 <h4 className="text-lg font-medium mb-3">
                   {editingItemId ? "Edit Item" : "Add New Item"}
                 </h4>
@@ -1011,7 +1035,7 @@ export default function Home() {
                 </form>
               </div>
 
-              <div>
+              <div className={`mb-6 ${settingsTab !== "assets" ? "hidden" : ""}`}>
                 <h4 className="text-lg font-medium mb-3">Defined Items</h4>
                 {items.length === 0 ? (
                   <p className="text-gray-500 text-center py-4">
@@ -1109,7 +1133,7 @@ export default function Home() {
                 )}
               </div>
 
-              <div className="mb-6 pt-4 border-t">
+              <div className={`mb-6 pt-4 border-t ${settingsTab !== "income" ? "hidden" : ""}`}>
                 <h4 className="text-lg font-medium mb-3">
                   {editingIeId ? "Edit Income/Expense" : "Add Income/Expense"}
                 </h4>
@@ -1224,7 +1248,7 @@ export default function Home() {
                 </form>
               </div>
 
-              <div className="mb-6">
+              <div className={`mb-6 ${settingsTab !== "income" ? "hidden" : ""}`}>
                 <h4 className="text-lg font-medium mb-3">Defined Income/Expenses</h4>
                 {incomeExpenses.length === 0 ? (
                   <p className="text-gray-500 text-center py-4">

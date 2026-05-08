@@ -10,22 +10,22 @@ Monorepo with two apps:
 ## Developer Commands
 
 ```bash
-# Frontend
-cd frontend && npm run dev           # dev server on :3000
-cd frontend && npm run build         # production build
-cd frontend && npm run lint          # eslint
-cd frontend && npx tsc --noEmit      # typecheck (no typecheck script in package.json)
+# Frontend (run from frontend/ directory)
+npm run dev    # dev server on :3000
+npm run build  # production build
+npm run lint   # eslint
+npx tsc --noEmit  # typecheck (no script in package.json)
 
-# Backend
-cd backend && python -m uvicorn main:app --reload  # dev server on :8000
-pip install -r requirements.txt                     # install deps
+# Backend (run from backend/ directory)
+pip install -r requirements.txt
+python -m uvicorn main:app --reload  # dev server on :8000
 ```
 
 ## Running the App
 
-Both services must run simultaneously:
-1. Backend: `uvicorn main:app --reload` (creates tables on startup)
-2. Frontend: `npm run dev`
+Run both services in separate terminals:
+1. Backend: `cd backend && python -m uvicorn main:app --reload`
+2. Frontend: `cd frontend && npm run dev`
 
 Frontend calls backend at `http://localhost:8000` (CORS restricted to `http://localhost:3000`).
 
@@ -48,4 +48,4 @@ None configured. Add tests if needed.
 
 ## Database
 
-- Migrations run via raw SQL ALTER TABLE statements in `main.py:19-30` on every backend startup. New tables are created automatically via SQLAlchemy `Base.metadata.create_all()`.
+- Migrations run via raw SQL ALTER TABLE statements in `main.py:27-38` on every backend startup. New tables created via `Base.metadata.create_all()` at `main.py:25`.

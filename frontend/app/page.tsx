@@ -629,6 +629,14 @@ export default function Home() {
   const orderedAssetItems = getOrderedItemsByType("asset");
   const orderedLiabilityItems = getOrderedItemsByType("liability");
 
+  const month = selectedMonthTab?.month ?? 1;
+  const applicableIncome = incomeExpenses.filter(i => i.ie_type === "income" && isIeApplicable(i.frequency, month));
+  const applicableExpenses = incomeExpenses.filter(i => i.ie_type === "expense" && isIeApplicable(i.frequency, month));
+  const incomeSum = applicableIncome.reduce((sum, ie) => sum + (ieValues[ie.id] ?? 0), 0);
+  const expenseSum = applicableExpenses.reduce((sum, ie) => sum + (ieValues[ie.id] ?? 0), 0);
+  const assetsTotal = orderedAssetItems.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
+  const liabilitiesTotal = orderedLiabilityItems.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
+
   const sortedSnapshots = [...snapshots].sort((a, b) => {
     if (a.year !== b.year) return b.year - a.year;
     return b.month - a.month;
@@ -835,66 +843,11 @@ export default function Home() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
-                      <h3 className="text-lg font-semibold text-green-600">Assets</h3>
-                      <span className="text-lg font-bold text-green-600">
-                        ₹{(
-                          (summary?.current_assets ?? 0) +
-                          (summary?.semi_liquid_assets ?? 0) +
-                          (summary?.retirement_assets ?? 0) +
-                          (summary?.property_assets ?? 0)
-                        ).toLocaleString('en-IN')}
-                      </span>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">Current</span>
-                        <span className="text-sm font-medium">₹{summary?.current_assets.toLocaleString('en-IN') ?? 0}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">Semi-Liquid</span>
-                        <span className="text-sm font-medium">₹{summary?.semi_liquid_assets.toLocaleString('en-IN') ?? 0}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">Retirement</span>
-                        <span className="text-sm font-medium">₹{summary?.retirement_assets.toLocaleString('en-IN') ?? 0}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">Property</span>
-                        <span className="text-sm font-medium">₹{summary?.property_assets.toLocaleString('en-IN') ?? 0}</span>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
-                      <h3 className="text-lg font-semibold text-red-600">Liabilities</h3>
-                      <span className="text-lg font-bold text-red-600">
-                        ₹{(
-                          (summary?.liquid_liabilities ?? 0) +
-                          (summary?.fixed_liabilities ?? 0)
-                        ).toLocaleString('en-IN')}
-                      </span>
-                    </div>
-                    <div className="space-y-2">
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">Liquid</span>
-                        <span className="text-sm font-medium">₹{summary?.liquid_liabilities.toLocaleString('en-IN') ?? 0}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">Fixed</span>
-                        <span className="text-sm font-medium">₹{summary?.fixed_liabilities.toLocaleString('en-IN') ?? 0}</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <h2 className="text-lg font-semibold">Assets</h2>
-                      <div className="flex gap-2">
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
+                      <h2 className="text-lg font-semibold text-green-600">Assets</h2>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg font-bold text-green-600">₹{assetsTotal.toLocaleString('en-IN')}</span>
                         <button
                           onClick={() => expandAllGroups(["asset-liquid", "asset-semi-liquid", "asset-fixed", "asset-retirement"])}
                           className="text-xs text-blue-600 hover:text-blue-800"
@@ -946,9 +899,10 @@ export default function Home() {
                     })}
                   </div>
                   <div className="space-y-4">
-                    <div className="flex justify-between items-center">
-                      <h2 className="text-lg font-semibold">Liabilities</h2>
-                      <div className="flex gap-2">
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
+                      <h2 className="text-lg font-semibold text-red-600">Liabilities</h2>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg font-bold text-red-600">₹{liabilitiesTotal.toLocaleString('en-IN')}</span>
                         <button
                           onClick={() => expandAllGroups(["liability-liquid", "liability-fixed"])}
                           className="text-xs text-blue-600 hover:text-blue-800"
@@ -1001,22 +955,17 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="space-y-4 mt-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
                   <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="flex justify-between items-center mb-4">
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
                       <button
                         onClick={() => toggleSection("income")}
                         className="flex items-center gap-2 text-lg font-semibold"
                       >
                         <span>{expandedSections.income ? "▼" : "▶"}</span>
-                        Income
+                        <span className="text-green-600">Income</span>
                       </button>
-                      <button
-                        onClick={expandedSections.income ? () => collapseAllGroups(["income-income"]) : () => expandAllGroups(["income-income"])}
-                        className="text-sm text-blue-600 hover:text-blue-800"
-                      >
-                        {expandedSections.income && expandedGroups["income-income"] ? "Collapse" : "Expand"}
-                      </button>
+                      <span className="text-lg font-bold text-green-600">₹{incomeSum.toLocaleString('en-IN')}</span>
                     </div>
                     {expandedSections.income && (
                       <div className="space-y-2">
@@ -1045,20 +994,15 @@ export default function Home() {
                     )}
                   </div>
                   <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="flex justify-between items-center mb-4">
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
                       <button
                         onClick={() => toggleSection("expenses")}
                         className="flex items-center gap-2 text-lg font-semibold"
                       >
                         <span>{expandedSections.expenses ? "▼" : "▶"}</span>
-                        Expenses
+                        <span className="text-red-600">Expenses</span>
                       </button>
-                      <button
-                        onClick={expandedSections.expenses ? () => collapseAllGroups(["income-expense"]) : () => expandAllGroups(["income-expense"])}
-                        className="text-sm text-blue-600 hover:text-blue-800"
-                      >
-                        {expandedSections.expenses && expandedGroups["income-expense"] ? "Collapse" : "Expand"}
-                      </button>
+                      <span className="text-lg font-bold text-red-600">₹{expenseSum.toLocaleString('en-IN')}</span>
                     </div>
                     {expandedSections.expenses && (
                       <div className="space-y-2">

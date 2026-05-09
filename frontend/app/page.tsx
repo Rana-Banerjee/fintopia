@@ -185,7 +185,10 @@ export default function Home() {
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    if (settingsTab === "liabilities") {
+    if (settingsTab === "assets") {
+      setEditingItemId(() => null);
+      setItemForm(prev => ({ ...prev, item_type: "asset", liquidity: "liquid" }));
+    } else if (settingsTab === "liabilities") {
       setEditingItemId(() => null);
       setItemForm(prev => ({ ...prev, item_type: "liability", liquidity: "fixed" }));
     } else if (settingsTab === "loan_expenses") {
@@ -197,6 +200,9 @@ export default function Home() {
     } else if (settingsTab === "regular_expenses") {
       setEditingIeId(() => null);
       setIeForm(prev => ({ ...prev, ie_type: "expense" }));
+    } else {
+      setEditingItemId(() => null);
+      setItemForm(prev => ({ ...prev, item_type: "asset", liquidity: "liquid" }));
     }
   }, [settingsTab]);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -400,7 +406,7 @@ export default function Home() {
       }
       setIeForm({
         name: "",
-        ie_type: "income",
+        ie_type: ieForm.ie_type,
         frequency: "monthly",
         appreciation_rate: "",
         appreciation_frequency: "monthly",
@@ -455,9 +461,10 @@ export default function Home() {
 
   function handleCancelIeEdit() {
     setEditingIeId(null);
+    const defaultIeType = settingsTab === "income" ? "income" : "expense";
     setIeForm({
       name: "",
-      ie_type: "income",
+      ie_type: defaultIeType,
       frequency: "monthly",
       appreciation_rate: "",
       appreciation_frequency: "monthly",

@@ -61,6 +61,8 @@ class Summary(BaseModel):
     loan_liabilities: float
     total_income: float
     total_expense: float
+    loan_interest: float
+    loan_emi: float
     net_cashflow: float
 
 

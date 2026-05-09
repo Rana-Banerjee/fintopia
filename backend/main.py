@@ -320,6 +320,8 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
 
     total_income = 0.0
     total_expense = 0.0
+    loan_interest = 0.0
+    loan_emi = 0.0
 
     for item in ie_items:
         if not is_active_in_month(item, month, year):
@@ -350,41 +352,14 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
                     continue
 
                 loan_value = ie_value_map.get(item.id, item.balance_disbursed or 0)
-                ie_value_map.pop(item.id, None)
 
                 if is_pre_emi:
                     if loan_value > 0:
                         interest = loan_value * (item.interest_rate / 100) / 12
-                        total_expense += interest
+                        loan_interest += interest
                 elif is_active_emi:
-                    P = loan_value
-                    if item.is_fixed_emi and item.fixed_emi_amount:
-                        emi = item.fixed_emi_amount
-                    else:
-                        annual_rate = item.interest_rate
-                        monthly_rate = annual_rate / 100 / 12
-                        if item.emi_end_year and item.emi_end_month:
-                            total_months = (
-                                item.emi_end_year - item.emi_start_year
-                            ) * 12 + (item.emi_end_month - item.emi_start_month)
-                            elapsed_months = (year - item.emi_start_year) * 12 + (
-                                month - item.emi_start_month
-                            )
-                            n = max(1, total_months - elapsed_months)
-                        else:
-                            n = 1
-                            monthly_rate = 0
-                        if P > 0 and monthly_rate > 0 and n > 0:
-                            emi = (
-                                P
-                                * monthly_rate
-                                * ((1 + monthly_rate) ** n)
-                                / (((1 + monthly_rate) ** n) - 1)
-                            )
-                        else:
-                            emi = 0
-                    total_expense += emi
-                    loan_liabilities += P
+                    loan_emi += item.fixed_emi_amount or 0
+                loan_liabilities += loan_value
             else:
                 value = ie_value_map.get(item.id, 0.0)
                 total_expense += value
@@ -394,7 +369,7 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
     )
     total_liabilities = liquid_liabilities + fixed_liabilities + loan_liabilities
     net_worth = total_assets - total_liabilities
-    net_cashflow = total_income - total_expense
+    net_cashflow = total_income - total_expense - loan_interest - loan_emi
     net_cash = (current_assets + semi_liquid_assets) - liquid_liabilities + net_cashflow
 
     return Summary(
@@ -409,6 +384,8 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
         loan_liabilities=loan_liabilities,
         total_income=total_income,
         total_expense=total_expense,
+        loan_interest=loan_interest,
+        loan_emi=loan_emi,
         net_cashflow=net_cashflow,
     )
 

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from database import Base
 
@@ -53,6 +53,8 @@ class IncomeExpense(Base):
     emi_end_year = Column(Integer, nullable=True)
     balance_disbursed = Column(Float, nullable=True)
     associated_asset_id = Column(Integer, ForeignKey("items.id"), nullable=True)
+    is_fixed_emi = Column(Boolean, default=False)
+    fixed_emi_amount = Column(Float, nullable=True)
 
     values = relationship("IncomeExpenseValue", back_populates="item")
     associated_asset = relationship("Item", foreign_keys=[associated_asset_id])

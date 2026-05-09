@@ -82,6 +82,8 @@ class IncomeExpenseBase(BaseModel):
     emi_end_year: Optional[int] = None
     balance_disbursed: Optional[float] = None
     associated_asset_id: Optional[int] = None
+    is_fixed_emi: bool = False
+    fixed_emi_amount: Optional[float] = None
 
 
 class IncomeExpenseCreate(IncomeExpenseBase):

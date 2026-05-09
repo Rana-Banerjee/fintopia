@@ -32,6 +32,8 @@ export interface IncomeExpense {
   emi_end_year: number | null;
   balance_disbursed: number | null;
   associated_asset_id: number | null;
+  is_fixed_emi: boolean | null;
+  fixed_emi_amount: number | null;
 }
 
 export interface Summary {
@@ -135,6 +137,10 @@ export async function createIncomeExpense(item: Omit<IncomeExpense, "id">): Prom
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(item),
   });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to create income/expense: ${res.status} ${text}`);
+  }
   return res.json();
 }
 
@@ -148,6 +154,10 @@ export async function updateIncomeExpense(id: number, item: Omit<IncomeExpense, 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(item),
   });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to update income/expense: ${res.status} ${text}`);
+  }
   return res.json();
 }
 

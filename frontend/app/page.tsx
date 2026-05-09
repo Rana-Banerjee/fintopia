@@ -89,8 +89,9 @@ export default function Home() {
     emi_start_year: "",
     emi_end_month: "",
     emi_end_year: "",
-    balance_disbursed: "",
     associated_asset_id: "",
+    is_fixed_emi: false,
+    fixed_emi_amount: "",
   });
   const [editingIeId, setEditingIeId] = useState<number | null>(null);
   const [ieValues, setIeValues] = useState<Record<number, number>>({});
@@ -182,6 +183,21 @@ export default function Home() {
     }
   }, [selectedMonthTab, incomeExpenses]);
 
+  /* eslint-disable react-hooks/set-state-in-effect */
+  useEffect(() => {
+    if (settingsTab === "loan_expenses") {
+      setEditingIeId(() => null);
+      setIeForm(prev => ({ ...prev, ie_type: "expense" }));
+    } else if (settingsTab === "income") {
+      setEditingIeId(() => null);
+      setIeForm(prev => ({ ...prev, ie_type: "income" }));
+    } else if (settingsTab === "regular_expenses") {
+      setEditingIeId(() => null);
+      setIeForm(prev => ({ ...prev, ie_type: "expense" }));
+    }
+  }, [settingsTab]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
   async function fetchData() {
     const [itemsData, snapshotsData, ieData] = await Promise.all([
       getItems(),
@@ -204,6 +220,7 @@ export default function Home() {
     if (selectedMonthTab) {
       loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
       loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
+      loadLoanBalances(selectedMonthTab.month, selectedMonthTab.year);
     } else if (snapshotsData.length > 0) {
       setSelectedMonthTab(snapshotsData[0]);
     }
@@ -333,13 +350,17 @@ export default function Home() {
     });
   }
 
-  function handleIeChange(field: string, value: string) {
+  function handleIeChange(field: string, value: string | boolean) {
     setIeForm({ ...ieForm, [field]: value });
   }
 
   async function handleSaveIe(e: React.FormEvent) {
     e.preventDefault();
     if (!ieForm.name) return;
+    if (ieForm.ie_type === "expense" && !ieForm.interest_rate) {
+      alert("Interest rate is required for loans.");
+      return;
+    }
 
     const payload = {
       name: ieForm.name,
@@ -357,15 +378,23 @@ export default function Home() {
       emi_start_year: ieForm.emi_start_year ? parseInt(ieForm.emi_start_year) : null,
       emi_end_month: ieForm.emi_end_month ? parseInt(ieForm.emi_end_month) : null,
       emi_end_year: ieForm.emi_end_year ? parseInt(ieForm.emi_end_year) : null,
-      balance_disbursed: ieForm.balance_disbursed ? parseFloat(ieForm.balance_disbursed) : null,
+      balance_disbursed: null,
       associated_asset_id: ieForm.associated_asset_id ? parseInt(ieForm.associated_asset_id) : null,
+      is_fixed_emi: ieForm.is_fixed_emi,
+      fixed_emi_amount: ieForm.fixed_emi_amount ? parseFloat(ieForm.fixed_emi_amount) : null,
     };
 
     if (editingIeId !== null) {
       await updateIncomeExpense(editingIeId, payload);
       handleCancelIeEdit();
     } else {
-      await createIncomeExpense(payload);
+      try {
+        await createIncomeExpense(payload);
+      } catch (err) {
+        console.error("Failed to create income/expense:", err);
+        alert("Failed to save. Check browser console for details.");
+        return;
+      }
       setIeForm({
         name: "",
         ie_type: "income",
@@ -382,8 +411,9 @@ export default function Home() {
         emi_start_year: "",
         emi_end_month: "",
         emi_end_year: "",
-        balance_disbursed: "",
         associated_asset_id: "",
+        is_fixed_emi: false,
+        fixed_emi_amount: "",
       });
     }
     fetchData();
@@ -402,18 +432,21 @@ export default function Home() {
       frequency: ie.frequency,
       appreciation_rate: ie.appreciation_rate?.toString() || "",
       appreciation_frequency: ie.appreciation_frequency || "monthly",
-      start_month: ie.start_month?.toString() || "",
-      start_year: ie.start_year?.toString() || "",
-      end_month: ie.end_month?.toString() || "",
-      end_year: ie.end_year?.toString() || "",
+      ...(ie.interest_rate ? { start_month: "", start_year: "", end_month: "", end_year: "" } : {
+        start_month: ie.start_month?.toString() || "",
+        start_year: ie.start_year?.toString() || "",
+        end_month: ie.end_month?.toString() || "",
+        end_year: ie.end_year?.toString() || "",
+      }),
       order: ie.order,
       interest_rate: ie.interest_rate?.toString() || "",
       emi_start_month: ie.emi_start_month?.toString() || "",
       emi_start_year: ie.emi_start_year?.toString() || "",
       emi_end_month: ie.emi_end_month?.toString() || "",
       emi_end_year: ie.emi_end_year?.toString() || "",
-      balance_disbursed: ie.balance_disbursed?.toString() || "",
       associated_asset_id: ie.associated_asset_id?.toString() || "",
+      is_fixed_emi: ie.is_fixed_emi ?? false,
+      fixed_emi_amount: ie.fixed_emi_amount?.toString() || "",
     });
   }
 
@@ -435,8 +468,9 @@ export default function Home() {
       emi_start_year: "",
       emi_end_month: "",
       emi_end_year: "",
-      balance_disbursed: "",
       associated_asset_id: "",
+      is_fixed_emi: false,
+      fixed_emi_amount: "",
     });
   }
 
@@ -548,25 +582,25 @@ export default function Home() {
   }
 
   function startAddIe(type: "income" | "expense", isLoan: boolean) {
-    setEditingIeId(null);
+    setEditingIeId(() => null);
     setIeForm({
       name: "",
       ie_type: type,
       frequency: "monthly",
       appreciation_rate: "",
       appreciation_frequency: "monthly",
-      start_month: "",
-      start_year: "",
-      end_month: "",
-      end_year: "",
+      ...(isLoan
+        ? { start_month: "", start_year: "", end_month: "", end_year: "" }
+        : { start_month: "", start_year: "", end_month: "", end_year: "" }),
       order: 0,
-      interest_rate: isLoan ? "" : "",
+      interest_rate: "",
       emi_start_month: "",
       emi_start_year: "",
       emi_end_month: "",
       emi_end_year: "",
-      balance_disbursed: isLoan ? "" : "",
       associated_asset_id: "",
+      is_fixed_emi: false,
+      fixed_emi_amount: "",
     });
   }
 
@@ -805,14 +839,13 @@ export default function Home() {
     return Math.round(emi * 100) / 100;
   }
 
-  function getLoanPhase(loan: IncomeExpense, month: number, year: number): "pre_emi" | "active" | "ended" | "future" {
-    if (!loan.emi_start_month || !loan.emi_start_year) return "pre_emi";
-    const isPreEmi = (year < loan.emi_start_year) || (year === loan.emi_start_year && month < loan.emi_start_month);
-    if (isPreEmi) return "pre_emi";
+  function getLoanPhase(loan: IncomeExpense, month: number, year: number): "pre_emi" | "active" | "ended" {
     if (loan.emi_end_month && loan.emi_end_year) {
       const isEnded = (year > loan.emi_end_year) || (year === loan.emi_end_year && month > loan.emi_end_month);
       if (isEnded) return "ended";
     }
+    const isFutureEmi = (year < loan.emi_start_year!) || (year === loan.emi_start_year! && month < loan.emi_start_month!);
+    if (isFutureEmi && !loan.is_fixed_emi) return "pre_emi";
     return "active";
   }
 
@@ -1164,7 +1197,9 @@ export default function Home() {
                               const phase = getLoanPhase(loan, month, selectedMonthTab?.year ?? 2026);
                               const outstanding = loanBalances[loan.id] ?? loan.balance_disbursed ?? 0;
                               const emi = phase === "active"
-                                ? computeLoanEmi(outstanding, loan.interest_rate ?? 0, loan.emi_end_month, loan.emi_end_year, loan.emi_start_month ?? 1, loan.emi_start_year ?? 2026, month, selectedMonthTab?.year ?? 2026)
+                                ? loan.is_fixed_emi && loan.fixed_emi_amount
+                                  ? loan.fixed_emi_amount
+                                  : computeLoanEmi(outstanding, loan.interest_rate ?? 0, loan.emi_end_month, loan.emi_end_year, loan.emi_start_month ?? 1, loan.emi_start_year ?? 2026, month, selectedMonthTab?.year ?? 2026)
                                 : null;
                               return (
                                 <tr key={loan.id} className="border-b border-purple-100 last:border-b-0">
@@ -1714,16 +1749,6 @@ export default function Home() {
                     </div>
                     <div className="flex flex-wrap gap-3">
                       <div className="flex gap-1 items-center">
-                        <span className="text-sm text-gray-600">Balance:</span>
-                        <input
-                          type="number"
-                          placeholder="Balance Disbursed"
-                          value={ieForm.balance_disbursed}
-                          onChange={(e) => handleIeChange("balance_disbursed", e.target.value)}
-                          className="px-2 py-1 border rounded-lg w-40"
-                        />
-                      </div>
-                      <div className="flex gap-1 items-center">
                         <span className="text-sm text-gray-600">Against Asset:</span>
                         <select
                           value={ieForm.associated_asset_id}
@@ -1737,13 +1762,28 @@ export default function Home() {
                         </select>
                       </div>
                     </div>
-                    <div className="flex gap-1 items-center flex-wrap">
-                      <span className="text-sm text-gray-600 mr-2">Valid period:</span>
-                      <input type="number" placeholder="From M" value={ieForm.start_month} onChange={(e) => handleIeChange("start_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
-                      <input type="number" placeholder="Y" value={ieForm.start_year} onChange={(e) => handleIeChange("start_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
-                      <span className="text-gray-400 mx-1">to</span>
-                      <input type="number" placeholder="M" value={ieForm.end_month} onChange={(e) => handleIeChange("end_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
-                      <input type="number" placeholder="Y" value={ieForm.end_year} onChange={(e) => handleIeChange("end_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
+                    <div className="flex flex-wrap gap-4 items-center">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={ieForm.is_fixed_emi}
+                          onChange={(e) => handleIeChange("is_fixed_emi", e.target.checked)}
+                          className="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
+                        />
+                        <span className="text-sm font-medium text-gray-700">Fixed EMI</span>
+                      </label>
+                      {ieForm.is_fixed_emi && (
+                        <div className="flex gap-1 items-center">
+                          <span className="text-sm text-gray-600">EMI Amount:</span>
+                          <input
+                            type="number"
+                            placeholder="Fixed EMI"
+                            value={ieForm.fixed_emi_amount}
+                            onChange={(e) => handleIeChange("fixed_emi_amount", e.target.value)}
+                            className="px-2 py-1 border rounded-lg w-36"
+                          />
+                        </div>
+                      )}
                     </div>
                     <div className="flex gap-2">
                       <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">

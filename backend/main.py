@@ -45,6 +45,8 @@ with engine.connect() as conn:
         ("emi_end_year", "INTEGER"),
         ("balance_disbursed", "REAL"),
         ("associated_asset_id", "INTEGER"),
+        ("is_fixed_emi", "INTEGER"),
+        ("fixed_emi_amount", "REAL"),
     ]:
         try:
             conn.execute(
@@ -151,15 +153,22 @@ def update_item(item_id: int, item: ItemCreate, db: Session = Depends(get_db)):
 
 @app.get("/month-values/{month}/{year}", response_model=MonthValuesResponse)
 def get_month_values(month: int, year: int, db: Session = Depends(get_db)):
+    loan_ids = [
+        l.id
+        for l in db.query(IncomeExpenseModel)
+        .filter(IncomeExpenseModel.interest_rate.isnot(None))
+        .all()
+    ]
     values = (
         db.query(MonthValueModel)
         .filter(and_(MonthValueModel.month == month, MonthValueModel.year == year))
         .all()
     )
+    non_loan = [v for v in values if v.item_id not in loan_ids]
     return MonthValuesResponse(
         month=month,
         year=year,
-        values=[{"item_id": v.item_id, "value": v.value} for v in values],
+        values=[{"item_id": v.item_id, "value": v.value} for v in non_loan],
     )
 
 
@@ -324,6 +333,7 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
                     continue
 
                 loan_value = value_map.get(item.id, item.balance_disbursed or 0)
+                ie_value_map.pop(item.id, None)
 
                 if is_pre_emi:
                     if loan_value > 0:
@@ -331,27 +341,32 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
                         total_expense += interest
                 elif is_active_emi:
                     P = loan_value
-                    annual_rate = item.interest_rate
-                    monthly_rate = annual_rate / 100 / 12
-                    if item.emi_end_year and item.emi_end_month:
-                        total_months = (
-                            item.emi_end_year - item.emi_start_year
-                        ) * 12 + (item.emi_end_month - item.emi_start_month)
-                        elapsed_months = (year - item.emi_start_year) * 12 + (
-                            month - item.emi_start_month
-                        )
-                        n = max(1, total_months - elapsed_months)
+                    if item.is_fixed_emi and item.fixed_emi_amount:
+                        emi = item.fixed_emi_amount
                     else:
-                        n = 1
-                        monthly_rate = 0
-                    if P > 0 and monthly_rate > 0 and n > 0:
-                        emi = (
-                            P
-                            * monthly_rate
-                            * ((1 + monthly_rate) ** n)
-                            / (((1 + monthly_rate) ** n) - 1)
-                        )
-                        total_expense += emi
+                        annual_rate = item.interest_rate
+                        monthly_rate = annual_rate / 100 / 12
+                        if item.emi_end_year and item.emi_end_month:
+                            total_months = (
+                                item.emi_end_year - item.emi_start_year
+                            ) * 12 + (item.emi_end_month - item.emi_start_month)
+                            elapsed_months = (year - item.emi_start_year) * 12 + (
+                                month - item.emi_start_month
+                            )
+                            n = max(1, total_months - elapsed_months)
+                        else:
+                            n = 1
+                            monthly_rate = 0
+                        if P > 0 and monthly_rate > 0 and n > 0:
+                            emi = (
+                                P
+                                * monthly_rate
+                                * ((1 + monthly_rate) ** n)
+                                / (((1 + monthly_rate) ** n) - 1)
+                            )
+                        else:
+                            emi = 0
+                    total_expense += emi
                     loan_liabilities += P
             else:
                 value = ie_value_map.get(item.id, 0.0)
@@ -440,6 +455,8 @@ def update_income_expense(
     db_item.emi_end_year = item.emi_end_year
     db_item.balance_disbursed = item.balance_disbursed
     db_item.associated_asset_id = item.associated_asset_id
+    db_item.is_fixed_emi = item.is_fixed_emi
+    db_item.fixed_emi_amount = item.fixed_emi_amount
     db.commit()
     db.refresh(db_item)
     return db_item

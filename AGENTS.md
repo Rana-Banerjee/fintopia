@@ -3,9 +3,9 @@
 ## Architecture
 
 Monorepo with two apps:
-- `frontend/` - Next.js 16, React 19, Recharts, TailwindCSS (port 3000)
+- `frontend/` - Next.js 16, React 19, Recharts, TailwindCSS v4 (port 3000)
 - `backend/` - FastAPI, SQLAlchemy, SQLite (port 8000)
-- Database: `fintopia.db` in backend directory (SQLite, created on first run)
+- Database: `backend/fintopia.db` (SQLite, created on first run)
 
 ## Developer Commands
 
@@ -14,11 +14,12 @@ Monorepo with two apps:
 npm run dev    # dev server on :3000
 npm run build  # production build
 npm run lint   # eslint
-npx tsc --noEmit  # typecheck (no script in package.json)
+npx tsc --noEmit  # typecheck
 
 # Backend (run from backend/ directory)
 pip install -r requirements.txt
 python -m uvicorn main:app --reload  # dev server on :8000
+# No formal typecheck — verify with: python -c "import main"
 ```
 
 ## Running the App

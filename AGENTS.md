@@ -5,7 +5,7 @@
 Monorepo with two apps:
 - `frontend/` - Next.js 16, React 19, Recharts, TailwindCSS (port 3000)
 - `backend/` - FastAPI, SQLAlchemy, SQLite (port 8000)
-- Database: `backend/fintopia.db` (SQLite)
+- Database: `fintopia.db` in backend directory (SQLite, created on first run)
 
 ## Developer Commands
 
@@ -27,7 +27,7 @@ Run both services in separate terminals:
 1. Backend: `cd backend && python -m uvicorn main:app --reload`
 2. Frontend: `cd frontend && npm run dev`
 
-Frontend calls backend at `http://localhost:8000` (CORS restricted to `http://localhost:3000`).
+Frontend calls backend at `http://localhost:8000` (hardcoded in `frontend/lib/api.ts:1`, CORS restricted to `http://localhost:3000`).
 
 ## Testing
 

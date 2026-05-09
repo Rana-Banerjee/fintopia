@@ -58,6 +58,7 @@ class Summary(BaseModel):
     retirement_assets: float
     property_assets: float
     fixed_liabilities: float
+    loan_liabilities: float
     total_income: float
     total_expense: float
     net_cashflow: float
@@ -74,6 +75,13 @@ class IncomeExpenseBase(BaseModel):
     end_month: Optional[int] = None
     end_year: Optional[int] = None
     order: int = 0
+    interest_rate: Optional[float] = None
+    emi_start_month: Optional[int] = None
+    emi_start_year: Optional[int] = None
+    emi_end_month: Optional[int] = None
+    emi_end_year: Optional[int] = None
+    balance_disbursed: Optional[float] = None
+    associated_asset_id: Optional[int] = None
 
 
 class IncomeExpenseCreate(IncomeExpenseBase):
@@ -109,3 +117,25 @@ class IncomeExpenseValuesResponse(BaseModel):
     month: int
     year: int
     values: list[dict]
+
+
+class BankContributionBase(BaseModel):
+    month: int
+    year: int
+    amount: float
+
+
+class BankContributionCreate(BankContributionBase):
+    pass
+
+
+class BankContribution(BankContributionBase):
+    id: int
+    income_expense_id: int
+
+    class Config:
+        from_attributes = True
+
+
+class BankContributionListResponse(BaseModel):
+    contributions: list[BankContribution]

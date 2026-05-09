@@ -46,8 +46,16 @@ class IncomeExpense(Base):
     end_month = Column(Integer, nullable=True)
     end_year = Column(Integer, nullable=True)
     order = Column(Integer, nullable=False, default=0)
+    interest_rate = Column(Float, nullable=True)
+    emi_start_month = Column(Integer, nullable=True)
+    emi_start_year = Column(Integer, nullable=True)
+    emi_end_month = Column(Integer, nullable=True)
+    emi_end_year = Column(Integer, nullable=True)
+    balance_disbursed = Column(Float, nullable=True)
+    associated_asset_id = Column(Integer, ForeignKey("items.id"), nullable=True)
 
     values = relationship("IncomeExpenseValue", back_populates="item")
+    associated_asset = relationship("Item", foreign_keys=[associated_asset_id])
 
 
 class IncomeExpenseValue(Base):

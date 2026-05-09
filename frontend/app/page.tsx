@@ -17,6 +17,8 @@ import {
   updateIncomeExpense,
   getIncomeExpenseValues,
   saveIncomeExpenseValues,
+  getLoanOutstandingBalances,
+  saveLoanOutstandingBalances,
   Item,
   IncomeExpense,
   Summary,
@@ -82,9 +84,17 @@ export default function Home() {
     end_month: "",
     end_year: "",
     order: 0,
+    interest_rate: "",
+    emi_start_month: "",
+    emi_start_year: "",
+    emi_end_month: "",
+    emi_end_year: "",
+    balance_disbursed: "",
+    associated_asset_id: "",
   });
   const [editingIeId, setEditingIeId] = useState<number | null>(null);
   const [ieValues, setIeValues] = useState<Record<number, number>>({});
+  const [loanBalances, setLoanBalances] = useState<Record<number, number>>({});
 
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
@@ -102,13 +112,20 @@ export default function Home() {
   const [addMonthPopoverOpen, setAddMonthPopoverOpen] = useState(false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"assets" | "income">("assets");
+  const [settingsTab, setSettingsTab] = useState<"assets" | "liabilities" | "income" | "regular_expenses" | "loan_expenses">("assets");
   const [itemOrder, setItemOrder] = useState<Record<string, number[]>>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("itemOrder");
       if (saved) return JSON.parse(saved);
     }
     return {};
+  });
+  const [ieOrder, setIeOrder] = useState<number[]>(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("ieOrder");
+      if (saved) return JSON.parse(saved);
+    }
+    return [];
   });
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
     if (typeof window !== "undefined") {
@@ -134,6 +151,7 @@ export default function Home() {
     propertyAssets: true,
     liquidLiabilities: true,
     fixedLiabilities: true,
+    loanLiabilities: true,
     netCash: true,
   });
   const [itemForm, setItemForm] = useState({
@@ -142,6 +160,10 @@ export default function Home() {
     liquidity: "liquid",
     appreciation_rate: "",
     appreciation_frequency: "monthly",
+    start_month: "",
+    start_year: "",
+    end_month: "",
+    end_year: "",
   });
   const [editingItemId, setEditingItemId] = useState<number | null>(null);
 
@@ -156,6 +178,7 @@ export default function Home() {
     if (selectedMonthTab) {
       loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
       loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
+      loadLoanBalances(selectedMonthTab.month, selectedMonthTab.year);
     }
   }, [selectedMonthTab, incomeExpenses]);
 
@@ -193,6 +216,11 @@ export default function Home() {
       valueMap[v.item_id] = v.value;
     });
     setIeValues(valueMap);
+  }
+
+  async function loadLoanBalances(month: number, year: number) {
+    const balances = await getLoanOutstandingBalances(month, year);
+    setLoanBalances(balances);
   }
 
   async function loadMonthValues(month: number, year: number) {
@@ -242,6 +270,10 @@ export default function Home() {
         itemForm.appreciation_rate && itemForm.appreciation_frequency
           ? itemForm.appreciation_frequency
           : null,
+      start_month: itemForm.start_month ? parseInt(itemForm.start_month) : null,
+      start_year: itemForm.start_year ? parseInt(itemForm.start_year) : null,
+      end_month: itemForm.end_month ? parseInt(itemForm.end_month) : null,
+      end_year: itemForm.end_year ? parseInt(itemForm.end_year) : null,
     };
 
     if (editingItemId !== null) {
@@ -255,6 +287,10 @@ export default function Home() {
         liquidity: "liquid",
         appreciation_rate: "",
         appreciation_frequency: "monthly",
+        start_month: "",
+        start_year: "",
+        end_month: "",
+        end_year: "",
       });
     }
     fetchData();
@@ -273,17 +309,27 @@ export default function Home() {
       liquidity: item.liquidity || "liquid",
       appreciation_rate: item.appreciation_rate?.toString() || "",
       appreciation_frequency: item.appreciation_frequency || "monthly",
+      start_month: item.start_month?.toString() || "",
+      start_year: item.start_year?.toString() || "",
+      end_month: item.end_month?.toString() || "",
+      end_year: item.end_year?.toString() || "",
     });
   }
 
   function handleCancelItemEdit() {
     setEditingItemId(null);
+    const defaultType = settingsTab === "liabilities" ? "liability" : "asset";
+    const defaultLiquidity = defaultType === "liability" ? "fixed" : "liquid";
     setItemForm({
       name: "",
-      item_type: "asset",
-      liquidity: "liquid",
+      item_type: defaultType,
+      liquidity: defaultLiquidity,
       appreciation_rate: "",
       appreciation_frequency: "monthly",
+      start_month: "",
+      start_year: "",
+      end_month: "",
+      end_year: "",
     });
   }
 
@@ -306,6 +352,13 @@ export default function Home() {
       end_month: ieForm.end_month ? parseInt(ieForm.end_month) : null,
       end_year: ieForm.end_year ? parseInt(ieForm.end_year) : null,
       order: ieForm.order,
+      interest_rate: ieForm.interest_rate ? parseFloat(ieForm.interest_rate) : null,
+      emi_start_month: ieForm.emi_start_month ? parseInt(ieForm.emi_start_month) : null,
+      emi_start_year: ieForm.emi_start_year ? parseInt(ieForm.emi_start_year) : null,
+      emi_end_month: ieForm.emi_end_month ? parseInt(ieForm.emi_end_month) : null,
+      emi_end_year: ieForm.emi_end_year ? parseInt(ieForm.emi_end_year) : null,
+      balance_disbursed: ieForm.balance_disbursed ? parseFloat(ieForm.balance_disbursed) : null,
+      associated_asset_id: ieForm.associated_asset_id ? parseInt(ieForm.associated_asset_id) : null,
     };
 
     if (editingIeId !== null) {
@@ -324,6 +377,13 @@ export default function Home() {
         end_month: "",
         end_year: "",
         order: 0,
+        interest_rate: "",
+        emi_start_month: "",
+        emi_start_year: "",
+        emi_end_month: "",
+        emi_end_year: "",
+        balance_disbursed: "",
+        associated_asset_id: "",
       });
     }
     fetchData();
@@ -334,7 +394,7 @@ export default function Home() {
     fetchData();
   }
 
-  function handleEditIe(ie: IncomeExpense) {
+  async function handleEditIe(ie: IncomeExpense) {
     setEditingIeId(ie.id);
     setIeForm({
       name: ie.name,
@@ -347,6 +407,13 @@ export default function Home() {
       end_month: ie.end_month?.toString() || "",
       end_year: ie.end_year?.toString() || "",
       order: ie.order,
+      interest_rate: ie.interest_rate?.toString() || "",
+      emi_start_month: ie.emi_start_month?.toString() || "",
+      emi_start_year: ie.emi_start_year?.toString() || "",
+      emi_end_month: ie.emi_end_month?.toString() || "",
+      emi_end_year: ie.emi_end_year?.toString() || "",
+      balance_disbursed: ie.balance_disbursed?.toString() || "",
+      associated_asset_id: ie.associated_asset_id?.toString() || "",
     });
   }
 
@@ -363,6 +430,13 @@ export default function Home() {
       end_month: "",
       end_year: "",
       order: 0,
+      interest_rate: "",
+      emi_start_month: "",
+      emi_start_year: "",
+      emi_end_month: "",
+      emi_end_year: "",
+      balance_disbursed: "",
+      associated_asset_id: "",
     });
   }
 
@@ -376,6 +450,11 @@ export default function Home() {
     setHasChanges(true);
   }
 
+  function handleLoanBalanceChange(loanId: number, value: string) {
+    setLoanBalances({ ...loanBalances, [loanId]: parseFloat(value) || 0 });
+    setHasChanges(true);
+  }
+
   function isIeApplicable(frequency: string, month: number): boolean {
     if (frequency === "monthly") return true;
     if (frequency === "bi_monthly") return month % 2 === 0;
@@ -385,22 +464,12 @@ export default function Home() {
     return true;
   }
 
-  async function handleSaveIeValues() {
-    if (!selectedMonthTab) return;
-    await saveIncomeExpenseValues(
-      selectedMonthTab.month,
-      selectedMonthTab.year,
-      ieValues
-    );
-    setHasChanges(false);
-    fetchData();
-  }
-
   async function handleSaveMonthValues() {
     if (!selectedMonthTab) return;
     await Promise.all([
       saveMonthValues(selectedMonthTab.month, selectedMonthTab.year, monthValues),
       saveIncomeExpenseValues(selectedMonthTab.month, selectedMonthTab.year, ieValues),
+      saveLoanOutstandingBalances(selectedMonthTab.month, selectedMonthTab.year, loanBalances),
     ]);
     setHasChanges(false);
     fetchData();
@@ -410,6 +479,7 @@ export default function Home() {
     if (!selectedMonthTab) return;
     loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
     loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
+    loadLoanBalances(selectedMonthTab.month, selectedMonthTab.year);
   }
 
   async function handleDeleteSnapshot(month: number, year: number) {
@@ -440,14 +510,6 @@ export default function Home() {
     setExpandedSections({ ...expandedSections, [key]: !expandedSections[key] });
   }
 
-  function expandAllSections() {
-    setExpandedSections({ assets: true, liabilities: true, income: true, expenses: true });
-  }
-
-  function collapseAllSections() {
-    setExpandedSections({ assets: false, liabilities: false, income: false, expenses: false });
-  }
-
   function expandAllGroups(keys: string[]) {
     const newState = { ...expandedGroups };
     keys.forEach(key => { newState[key] = true; });
@@ -471,6 +533,40 @@ export default function Home() {
       if (idxA === -1) return 1;
       if (idxB === -1) return -1;
       return idxA - idxB;
+    });
+  }
+
+  function getOrderedIeItems(ieItems: IncomeExpense[]): IncomeExpense[] {
+    return [...ieItems].sort((a, b) => {
+      const idxA = ieOrder.indexOf(a.id);
+      const idxB = ieOrder.indexOf(b.id);
+      if (idxA === -1 && idxB === -1) return 0;
+      if (idxA === -1) return 1;
+      if (idxB === -1) return -1;
+      return idxA - idxB;
+    });
+  }
+
+  function startAddIe(type: "income" | "expense", isLoan: boolean) {
+    setEditingIeId(null);
+    setIeForm({
+      name: "",
+      ie_type: type,
+      frequency: "monthly",
+      appreciation_rate: "",
+      appreciation_frequency: "monthly",
+      start_month: "",
+      start_year: "",
+      end_month: "",
+      end_year: "",
+      order: 0,
+      interest_rate: isLoan ? "" : "",
+      emi_start_month: "",
+      emi_start_year: "",
+      emi_end_month: "",
+      emi_end_year: "",
+      balance_disbursed: isLoan ? "" : "",
+      associated_asset_id: "",
     });
   }
 
@@ -508,13 +604,47 @@ export default function Home() {
     localStorage.setItem("itemOrder", JSON.stringify(newItemOrder));
   }
 
-  function SortableItem({
-    item,
-    groupKey,
-  }: {
-    item: Item;
-    groupKey: string;
-  }) {
+  function handleIeDragEnd(event: DragEndEvent, ieItems: IncomeExpense[]) {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    const ordered = [...ieItems].sort((a, b) => {
+      const idxA = ieOrder.indexOf(a.id);
+      const idxB = ieOrder.indexOf(b.id);
+      if (idxA === -1 && idxB === -1) return 0;
+      if (idxA === -1) return 1;
+      if (idxB === -1) return -1;
+      return idxA - idxB;
+    });
+
+    const currentOrder = ordered.map(i => i.id);
+    const hasAllItems = ieOrder.length === currentOrder.length &&
+      currentOrder.every(id => ieOrder.includes(id));
+
+    let newOrder: number[];
+    if (hasAllItems && ieOrder.length > 0) {
+      newOrder = [...ieOrder];
+      const oldIndex = newOrder.indexOf(active.id as number);
+      const newIndex = newOrder.indexOf(over.id as number);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        newOrder.splice(oldIndex, 1);
+        newOrder.splice(newIndex, 0, active.id as number);
+      }
+    } else {
+      newOrder = [...currentOrder];
+      const oldIndex = currentOrder.indexOf(active.id as number);
+      const newIndex = currentOrder.indexOf(over.id as number);
+      if (oldIndex !== -1 && newIndex !== -1) {
+        newOrder.splice(oldIndex, 1);
+        newOrder.splice(newIndex, 0, active.id as number);
+      }
+    }
+
+    setIeOrder(newOrder);
+    localStorage.setItem("ieOrder", JSON.stringify(newOrder));
+  }
+
+  function SortableItem({ item }: { item: Item }) {
     const {
       attributes,
       listeners,
@@ -565,28 +695,63 @@ export default function Home() {
     );
   }
 
-  async function handleAddMonth() {
-    const month = parseInt(currentMonth);
-    const year = parseInt(currentYear);
-    if (!snapshots.find((s) => s.month === month && s.year === year)) {
-      const initialValues: Record<number, number> = {};
-      
-      if (copyFromSnapshot) {
-        const [srcMonth, srcYear] = copyFromSnapshot.split("-").map(Number);
-        const srcValues = await getMonthValues(srcMonth, srcYear);
-        srcValues.forEach((v) => {
-          initialValues[v.item_id] = v.value;
-        });
-      } else {
-        [...orderedAssetItems, ...orderedLiabilityItems].forEach((item) => {
-          initialValues[item.id] = 0;
-        });
-      }
-      
-      await saveMonthValues(month, year, initialValues);
-      await fetchData();
-      setSelectedMonthTab({ month, year });
-    }
+  function SortableIeItem({ ie }: { ie: IncomeExpense }) {
+    const {
+      attributes,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging,
+    } = useSortable({ id: ie.id });
+
+    const style = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.5 : 1,
+    };
+
+    const isLoan = !!ie.interest_rate;
+
+    return (
+      <div
+        ref={setNodeRef}
+        style={style}
+        className="flex items-center justify-between"
+      >
+        <div className="flex items-center gap-2">
+          <button
+            {...attributes}
+            {...listeners}
+            className="cursor-grab text-gray-400 hover:text-gray-600 p-1"
+            title="Drag to reorder"
+          >
+            ⋮⋮
+          </button>
+          <span>{ie.name}</span>
+          <span className="text-xs text-gray-400">
+            ({FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label})
+          </span>
+          {isLoan && (
+            <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Loan</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => handleEditIe(ie)}
+            className="text-blue-600 hover:text-blue-800 mr-3"
+          >
+            Edit
+          </button>
+          <button
+            onClick={() => handleDeleteIe(ie.id)}
+            className="text-red-600 hover:text-red-800"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    );
   }
 
   async function handleCreateMonth(month: number, year: number, copyFrom: string) {
@@ -612,9 +777,6 @@ export default function Home() {
     }
   }
 
-  const assetItems = items.filter((i) => i.item_type === "asset");
-  const liabilityItems = items.filter((i) => i.item_type === "liability");
-
   const getOrderedItemsByType = (itemType: string) => {
     const types = itemType === "asset"
       ? ["liquid", "semi-liquid", "fixed", "retirement"]
@@ -629,13 +791,45 @@ export default function Home() {
   const orderedAssetItems = getOrderedItemsByType("asset");
   const orderedLiabilityItems = getOrderedItemsByType("liability");
 
+  function computeLoanEmi(P: number, annualRate: number, emiEndMonth: number | null, emiEndYear: number | null, emiStartMonth: number, emiStartYear: number, currentMonth: number, currentYear: number): number | null {
+    if (P <= 0 || !annualRate) return null;
+    const monthlyRate = annualRate / 100 / 12;
+    let n = 12;
+    if (emiEndYear && emiEndMonth) {
+      const totalMonths = (emiEndYear - emiStartYear) * 12 + (emiEndMonth - emiStartMonth);
+      const elapsed = (currentYear - emiStartYear) * 12 + (currentMonth - emiStartMonth);
+      n = Math.max(1, totalMonths - elapsed);
+    }
+    if (n <= 0 || monthlyRate <= 0) return null;
+    const emi = P * monthlyRate * (Math.pow(1 + monthlyRate, n)) / (Math.pow(1 + monthlyRate, n) - 1);
+    return Math.round(emi * 100) / 100;
+  }
+
+  function getLoanPhase(loan: IncomeExpense, month: number, year: number): "pre_emi" | "active" | "ended" | "future" {
+    if (!loan.emi_start_month || !loan.emi_start_year) return "pre_emi";
+    const isPreEmi = (year < loan.emi_start_year) || (year === loan.emi_start_year && month < loan.emi_start_month);
+    if (isPreEmi) return "pre_emi";
+    if (loan.emi_end_month && loan.emi_end_year) {
+      const isEnded = (year > loan.emi_end_year) || (year === loan.emi_end_year && month > loan.emi_end_month);
+      if (isEnded) return "ended";
+    }
+    return "active";
+  }
+
   const month = selectedMonthTab?.month ?? 1;
   const applicableIncome = incomeExpenses.filter(i => i.ie_type === "income" && isIeApplicable(i.frequency, month));
-  const applicableExpenses = incomeExpenses.filter(i => i.ie_type === "expense" && isIeApplicable(i.frequency, month));
+  const applicableExpenses = incomeExpenses.filter(i => i.ie_type === "expense" && isIeApplicable(i.frequency, month) && !i.interest_rate);
   const incomeSum = applicableIncome.reduce((sum, ie) => sum + (ieValues[ie.id] ?? 0), 0);
   const expenseSum = applicableExpenses.reduce((sum, ie) => sum + (ieValues[ie.id] ?? 0), 0);
   const assetsTotal = orderedAssetItems.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
   const liabilitiesTotal = orderedLiabilityItems.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
+
+  const allLoans = incomeExpenses.filter(i => i.ie_type === "expense" && !!i.interest_rate);
+  const visibleLoans = allLoans.filter(loan => {
+    const phase = getLoanPhase(loan, month, selectedMonthTab?.year ?? 2026);
+    return phase !== "ended";
+  });
+  const loansTotal = visibleLoans.reduce((sum, loan) => sum + (loanBalances[loan.id] ?? loan.balance_disbursed ?? 0), 0);
 
   const sortedSnapshots = [...snapshots].sort((a, b) => {
     if (a.year !== b.year) return b.year - a.year;
@@ -645,7 +839,7 @@ export default function Home() {
   const chartData = snapshots.map((s, idx) => {
     const summary = chartSummaries[idx];
     const totalAssets = (summary?.current_assets ?? 0) + (summary?.semi_liquid_assets ?? 0) + (summary?.retirement_assets ?? 0) + (summary?.property_assets ?? 0);
-    const totalLiabilities = (summary?.liquid_liabilities ?? 0) + (summary?.fixed_liabilities ?? 0);
+    const totalLiabilities = (summary?.liquid_liabilities ?? 0) + (summary?.fixed_liabilities ?? 0) + (summary?.loan_liabilities ?? 0);
     return {
       name: `${s.month}/${s.year}`,
       currentAssets: summary?.current_assets ?? 0,
@@ -655,15 +849,11 @@ export default function Home() {
       totalAssets,
       liquidLiabilities: summary?.liquid_liabilities ?? 0,
       fixedLiabilities: summary?.fixed_liabilities ?? 0,
+      loanLiabilities: summary?.loan_liabilities ?? 0,
       totalLiabilities,
       netWorth: totalAssets - totalLiabilities,
       netCash: (summary?.current_assets ?? 0) + (summary?.semi_liquid_assets ?? 0) - (summary?.liquid_liabilities ?? 0),
     };
-  });
-
-  const futureSnapshots = [...snapshots].sort((a, b) => {
-    if (a.year !== b.year) return a.year - b.year;
-    return a.month - b.month;
   });
 
   return (
@@ -749,7 +939,8 @@ export default function Home() {
                             {visibleLines.propertyAssets && <Line type="monotone" dataKey="propertyAssets" name="Property Assets" stroke="#3b82f6" strokeWidth={2} />}
                             {visibleLines.liquidLiabilities && <Line type="monotone" dataKey="liquidLiabilities" name="Liquid Liabilities" stroke="#f97316" strokeWidth={2} />}
                             {visibleLines.fixedLiabilities && <Line type="monotone" dataKey="fixedLiabilities" name="Fixed Liabilities" stroke="#ef4444" strokeWidth={2} />}
-                            {visibleLines.netCash && <Line type="monotone" dataKey="netCash" name="Net Cash" stroke="#a855f7" strokeWidth={2} />}
+                            {visibleLines.loanLiabilities && <Line type="monotone" dataKey="loanLiabilities" name="Loan Liabilities" stroke="#a855f7" strokeWidth={2} />}
+                            {visibleLines.netCash && <Line type="monotone" dataKey="netCash" name="Net Cash" stroke="#64748b" strokeWidth={2} />}
                           </LineChart>
                         </ResponsiveContainer>
                       </div>
@@ -824,7 +1015,8 @@ export default function Home() {
                         (summary?.retirement_assets ?? 0) +
                         (summary?.property_assets ?? 0) -
                         (summary?.liquid_liabilities ?? 0) -
-                        (summary?.fixed_liabilities ?? 0)
+                        (summary?.fixed_liabilities ?? 0) -
+                        (summary?.loan_liabilities ?? 0)
                       ).toLocaleString('en-IN')}
                     </div>
                   </div>
@@ -842,7 +1034,7 @@ export default function Home() {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+<div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div className="space-y-4">
                     <div className="flex justify-between items-center mb-3 pb-2 border-b">
                       <h2 className="text-lg font-semibold text-green-600">Assets</h2>
@@ -902,7 +1094,7 @@ export default function Home() {
                     <div className="flex justify-between items-center mb-3 pb-2 border-b">
                       <h2 className="text-lg font-semibold text-red-600">Liabilities</h2>
                       <div className="flex items-center gap-2">
-                        <span className="text-lg font-bold text-red-600">₹{liabilitiesTotal.toLocaleString('en-IN')}</span>
+                        <span className="text-lg font-bold text-red-600">₹{(liabilitiesTotal + loansTotal).toLocaleString('en-IN')}</span>
                         <button
                           onClick={() => expandAllGroups(["liability-liquid", "liability-fixed"])}
                           className="text-xs text-blue-600 hover:text-blue-800"
@@ -952,6 +1144,59 @@ export default function Home() {
                         </div>
                       );
                     })}
+                    {visibleLoans.length > 0 && (
+                      <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
+                        <div className="flex justify-between items-center mb-3 pb-2 border-b border-purple-200">
+                          <h3 className="text-md font-semibold text-purple-700">Loans</h3>
+                          <span className="text-md font-bold text-purple-700">₹{loansTotal.toLocaleString('en-IN')}</span>
+                        </div>
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="text-left text-purple-600 text-xs border-b border-purple-200">
+                              <th className="pb-1 font-medium">Name</th>
+                              <th className="pb-1 font-medium text-right">Balance</th>
+                              <th className="pb-1 font-medium text-right">EMI</th>
+                              <th className="pb-1 font-medium text-right">Phase</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {visibleLoans.map(loan => {
+                              const phase = getLoanPhase(loan, month, selectedMonthTab?.year ?? 2026);
+                              const outstanding = loanBalances[loan.id] ?? loan.balance_disbursed ?? 0;
+                              const emi = phase === "active"
+                                ? computeLoanEmi(outstanding, loan.interest_rate ?? 0, loan.emi_end_month, loan.emi_end_year, loan.emi_start_month ?? 1, loan.emi_start_year ?? 2026, month, selectedMonthTab?.year ?? 2026)
+                                : null;
+                              return (
+                                <tr key={loan.id} className="border-b border-purple-100 last:border-b-0">
+                                  <td className="py-1.5 font-medium text-gray-700">{loan.name}</td>
+                                  <td className="py-1.5 text-right">
+                                    <input
+                                      type="number"
+                                      value={loanBalances[loan.id] ?? ""}
+                                      placeholder={(loan.balance_disbursed ?? 0).toString()}
+                                      onChange={e => handleLoanBalanceChange(loan.id, e.target.value)}
+                                      className="w-32 px-2 py-0.5 border rounded text-right text-sm"
+                                    />
+                                  </td>
+                                  <td className="py-1.5 text-right text-gray-600">
+                                    {emi != null ? `₹${emi.toLocaleString('en-IN')}` : "—"}
+                                  </td>
+                                  <td className="py-1.5 text-right">
+                                    <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                      phase === "pre_emi" ? "bg-amber-100 text-amber-700" :
+                                      phase === "active" ? "bg-green-100 text-green-700" :
+                                      "bg-gray-100 text-gray-500"
+                                    }`}>
+                                      {phase === "pre_emi" ? "Pre-EMI" : phase === "active" ? "Active" : phase}
+                                    </span>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -971,21 +1216,18 @@ export default function Home() {
                       <div className="space-y-2">
                         {(() => {
                           const filtered = incomeExpenses.filter(i => i.ie_type === "income" && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1));
-                          return filtered.map(ie => {
-                            const total = ieValues[ie.id] ?? 0;
-                            return (
-                              <div key={ie.id} className="flex items-center gap-2">
-                                <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
-                                <span className="text-xs text-gray-500">{FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label}</span>
-                                <input
-                                  type="number"
-                                  value={ieValues[ie.id] ?? 0}
-                                  onChange={e => handleIeValueChange(ie.id, e.target.value)}
-                                  className="w-28 px-2 py-1 border rounded text-right text-sm"
-                                />
-                              </div>
-                            );
-                          });
+                          return filtered.map(ie => (
+                            <div key={ie.id} className="flex items-center gap-2">
+                              <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
+                              <span className="text-xs text-gray-500">{FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label}</span>
+                              <input
+                                type="number"
+                                value={ieValues[ie.id] ?? 0}
+                                onChange={e => handleIeValueChange(ie.id, e.target.value)}
+                                className="w-28 px-2 py-1 border rounded text-right text-sm"
+                              />
+                            </div>
+                          ));
                         })()}
                         {incomeExpenses.filter(i => i.ie_type === "income" && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1)).length === 0 && (
                           <p className="text-sm text-gray-500">No income items defined. Add in Settings.</p>
@@ -1007,25 +1249,22 @@ export default function Home() {
                     {expandedSections.expenses && (
                       <div className="space-y-2">
                         {(() => {
-                          const filtered = incomeExpenses.filter(i => i.ie_type === "expense" && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1));
-                          return filtered.map(ie => {
-                            const total = ieValues[ie.id] ?? 0;
-                            return (
-                              <div key={ie.id} className="flex items-center gap-2">
-                                <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
-                                <span className="text-xs text-gray-500">{FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label}</span>
-                                <input
-                                  type="number"
-                                  value={ieValues[ie.id] ?? 0}
-                                  onChange={e => handleIeValueChange(ie.id, e.target.value)}
-                                  className="w-28 px-2 py-1 border rounded text-right text-sm"
-                                />
-                              </div>
-                            );
-                          });
+                          const filtered = incomeExpenses.filter(i => i.ie_type === "expense" && !i.interest_rate && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1));
+                          return filtered.map(ie => (
+                            <div key={ie.id} className="flex items-center gap-2">
+                              <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
+                              <span className="text-xs text-gray-500">{FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label}</span>
+                              <input
+                                type="number"
+                                value={ieValues[ie.id] ?? 0}
+                                onChange={e => handleIeValueChange(ie.id, e.target.value)}
+                                className="w-28 px-2 py-1 border rounded text-right text-sm"
+                              />
+                            </div>
+                          ));
                         })()}
-                        {incomeExpenses.filter(i => i.ie_type === "expense" && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1)).length === 0 && (
-                          <p className="text-sm text-gray-500">No expense items defined. Add in Settings.</p>
+                        {incomeExpenses.filter(i => i.ie_type === "expense" && !i.interest_rate && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1)).length === 0 && (
+                          <p className="text-sm text-gray-500">No regular expense items. Add in Settings.</p>
                         )}
                       </div>
                     )}
@@ -1060,373 +1299,483 @@ export default function Home() {
                 </button>
               </div>
 
-              <div className="flex border-b mb-4">
-                <button
-                  onClick={() => setSettingsTab("assets")}
-                  className={`px-4 py-2 font-medium ${
-                    settingsTab === "assets"
-                      ? "border-b-2 border-blue-600 text-blue-600"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  Assets & Liabilities
-                </button>
-                <button
-                  onClick={() => setSettingsTab("income")}
-                  className={`px-4 py-2 font-medium ${
-                    settingsTab === "income"
-                      ? "border-b-2 border-blue-600 text-blue-600"
-                      : "text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  Income & Expenses
-                </button>
+              <div className="flex border-b mb-4 overflow-x-auto">
+                {(["assets", "liabilities", "income", "regular_expenses", "loan_expenses"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setSettingsTab(tab)}
+                    className={`px-4 py-2 font-medium whitespace-nowrap ${
+                      settingsTab === tab
+                        ? "border-b-2 border-blue-600 text-blue-600"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                  >
+                    {tab === "regular_expenses" ? "Regular Expenses" :
+                     tab === "loan_expenses" ? "Loan Expenses" :
+                     tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  </button>
+                ))}
               </div>
 
-              <div className={`mb-6 ${settingsTab !== "assets" ? "hidden" : ""}`}>
-                <h4 className="text-lg font-medium mb-3">
-                  {editingItemId ? "Edit Item" : "Add New Item"}
-                </h4>
-                <form onSubmit={handleSaveItem} className="space-y-3">
-                  <div className="flex flex-wrap gap-3">
-                    <select
-                      value={itemForm.item_type}
-                      onChange={(e) =>
-                        handleItemChange("item_type", e.target.value)
-                      }
-                      className="px-3 py-2 border rounded-lg"
+              {settingsTab === "assets" && (
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-lg font-medium">Assets</h4>
+                    <button
+                      onClick={() => {
+                        setEditingItemId(null);
+                        setItemForm({ name: "", item_type: "asset", liquidity: "liquid", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "" });
+                      }}
+                      className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
                     >
-                      <option value="asset">Asset</option>
-                      <option value="liability">Liability</option>
-                    </select>
-                    <input
-                      type="text"
-                      placeholder="Name"
-                      value={itemForm.name}
-                      onChange={(e) => handleItemChange("name", e.target.value)}
-                      className="px-3 py-2 border rounded-lg flex-1 min-w-[150px]"
-                    />
+                      + Add Asset
+                    </button>
                   </div>
-                  <div className="flex flex-wrap gap-3">
-                    <select
-                      value={itemForm.liquidity}
-                      onChange={(e) =>
-                        handleItemChange("liquidity", e.target.value)
-                      }
-                      className="px-3 py-2 border rounded-lg"
-                    >
-                      {(itemForm.item_type === "asset" ? LIQUIDITY_TYPES : LIABILITY_LIQUIDITY_TYPES).map((t) => (
-                        <option key={t.value} value={t.value}>
-                          {t.label}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="number"
-                      placeholder="Appreciation Rate (%)"
-                      value={itemForm.appreciation_rate}
-                      onChange={(e) =>
-                        handleItemChange("appreciation_rate", e.target.value)
-                      }
-                      className="px-3 py-2 border rounded-lg w-48"
-                    />
-                    {itemForm.appreciation_rate && (
+                  <form onSubmit={handleSaveItem} className="space-y-3 mb-6 p-4 bg-gray-50 rounded-lg">
+                    <div className="flex flex-wrap gap-3">
+                      <input
+                        type="text"
+                        placeholder="Name"
+                        value={itemForm.name}
+                        onChange={(e) => handleItemChange("name", e.target.value)}
+                        className="px-3 py-2 border rounded-lg flex-1 min-w-[150px]"
+                      />
                       <select
-                        value={itemForm.appreciation_frequency}
-                        onChange={(e) =>
-                          handleItemChange(
-                            "appreciation_frequency",
-                            e.target.value
-                          )
-                        }
+                        value={itemForm.liquidity}
+                        onChange={(e) => handleItemChange("liquidity", e.target.value)}
                         className="px-3 py-2 border rounded-lg"
                       >
-                        {APPRECIATION_FREQUENCIES.map((f) => (
-                          <option key={f.value} value={f.value}>
-                            {f.label}
-                          </option>
+                        {LIQUIDITY_TYPES.map((t) => (
+                          <option key={t.value} value={t.value}>{t.label}</option>
                         ))}
                       </select>
-                    )}
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="submit"
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                    >
-                      {editingItemId ? "Update" : "Add"}
-                    </button>
-                    {editingItemId && (
-                      <button
-                        type="button"
-                        onClick={handleCancelItemEdit}
-                        className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400"
-                      >
-                        Cancel
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <input
+                        type="number"
+                        placeholder="Appreciation Rate (%)"
+                        value={itemForm.appreciation_rate}
+                        onChange={(e) => handleItemChange("appreciation_rate", e.target.value)}
+                        className="px-3 py-2 border rounded-lg w-48"
+                      />
+                      {itemForm.appreciation_rate && (
+                        <select
+                          value={itemForm.appreciation_frequency}
+                          onChange={(e) => handleItemChange("appreciation_frequency", e.target.value)}
+                          className="px-3 py-2 border rounded-lg"
+                        >
+                          {APPRECIATION_FREQUENCIES.map((f) => (
+                            <option key={f.value} value={f.value}>{f.label}</option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        {editingItemId ? "Update" : "Add"}
                       </button>
-                    )}
-                  </div>
-                </form>
-              </div>
-
-              <div className={`mb-6 ${settingsTab !== "assets" ? "hidden" : ""}`}>
-                <h4 className="text-lg font-medium mb-3">Defined Items</h4>
-                {items.length === 0 ? (
-                  <p className="text-gray-500 text-center py-4">
-                    No items defined yet. Add your first item above.
-                  </p>
-                ) : (
-                  <>
-                    <div className="mb-4">
-                      <h5 className="text-md font-semibold mb-2">Assets</h5>
-                      {(["liquid", "semi-liquid", "fixed", "retirement"] as const).map((liquidity) => {
-                        const allGroupItems = items.filter((i) => i.item_type === "asset" && i.liquidity === liquidity);
-                        if (allGroupItems.length === 0) return null;
-                        const groupKey = `asset-${liquidity}`;
-                        const groupItems = getOrderedItems(allGroupItems, groupKey);
-                        return (
-                          <div key={groupKey} className="mb-2 border rounded-lg">
-                            <button
-                              onClick={() => toggleGroup(groupKey)}
-                              className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50"
-                            >
-                              <span className="font-medium capitalize">
-                                {liquidity.replace("-", " ")} ({groupItems.length})
-                              </span>
-                              <span>{expandedGroups[groupKey] ? "▼" : "▶"}</span>
-                            </button>
-                            {expandedGroups[groupKey] && (
-                              <DndContext
-                                collisionDetection={closestCenter}
-                                onDragEnd={(e) => handleDragEnd(e, groupKey, groupItems)}
-                              >
-                                <SortableContext
-                                  items={groupItems.map((i) => i.id)}
-                                  strategy={verticalListSortingStrategy}
-                                >
-                                  <div className="border-t px-3 py-2 space-y-2">
-                                    {groupItems.map((item) => (
+                      {editingItemId && (
+                        <button type="button" onClick={handleCancelItemEdit} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400">
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                  {(["liquid", "semi-liquid", "fixed", "retirement"] as const).map((liquidity) => {
+                    const allGroupItems = items.filter((i) => i.item_type === "asset" && i.liquidity === liquidity);
+                    if (allGroupItems.length === 0) return null;
+                    const groupKey = `asset-${liquidity}`;
+                    const groupItems = getOrderedItems(allGroupItems, groupKey);
+                    return (
+                      <div key={groupKey} className="mb-2 border rounded-lg">
+                        <button
+                          onClick={() => toggleGroup(groupKey)}
+                          className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50"
+                        >
+                          <span className="font-medium capitalize">{liquidity.replace("-", " ")} ({groupItems.length})</span>
+                          <span>{expandedGroups[groupKey] ? "▼" : "▶"}</span>
+                        </button>
+                        {expandedGroups[groupKey] && (
+                          <DndContext collisionDetection={closestCenter} onDragEnd={(e) => handleDragEnd(e, groupKey, groupItems)}>
+                            <SortableContext items={groupItems.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+                              <div className="border-t px-3 py-2 space-y-2">
+                                {groupItems.map((item) => (
                                       <SortableItem
                                         key={item.id}
                                         item={item}
-                                        groupKey={groupKey}
                                       />
-                                    ))}
-                                  </div>
-                                </SortableContext>
-                              </DndContext>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div>
-                      <h5 className="text-md font-semibold mb-2">Liabilities</h5>
-                      {(["liquid", "fixed"] as const).map((liquidity) => {
-                        const allGroupItems = items.filter((i) => i.item_type === "liability" && i.liquidity === liquidity);
-                        if (allGroupItems.length === 0) return null;
-                        const groupKey = `liability-${liquidity}`;
-                        const groupItems = getOrderedItems(allGroupItems, groupKey);
-                        return (
-                          <div key={groupKey} className="mb-2 border rounded-lg">
-                            <button
-                              onClick={() => toggleGroup(groupKey)}
-                              className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50"
-                            >
-                              <span className="font-medium capitalize">
-                                {liquidity} ({groupItems.length})
-                              </span>
-                              <span>{expandedGroups[groupKey] ? "▼" : "▶"}</span>
-                            </button>
-                            {expandedGroups[groupKey] && (
-                              <DndContext
-                                collisionDetection={closestCenter}
-                                onDragEnd={(e) => handleDragEnd(e, groupKey, groupItems)}
-                              >
-                                <SortableContext
-                                  items={groupItems.map((i) => i.id)}
-                                  strategy={verticalListSortingStrategy}
-                                >
-                                  <div className="border-t px-3 py-2 space-y-2">
-                                    {groupItems.map((item) => (
-                                      <SortableItem
-                                        key={item.id}
-                                        item={item}
-                                        groupKey={groupKey}
-                                      />
-                                    ))}
-                                  </div>
-                                </SortableContext>
-                              </DndContext>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
-              </div>
+                                ))}
+                              </div>
+                            </SortableContext>
+                          </DndContext>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {items.filter((i) => i.item_type === "asset").length === 0 && (
+                    <p className="text-gray-500 text-center py-4">No assets yet. Add one above.</p>
+                  )}
+                </div>
+              )}
 
-              <div className={`mb-6 pt-4 border-t ${settingsTab !== "income" ? "hidden" : ""}`}>
-                <h4 className="text-lg font-medium mb-3">
-                  {editingIeId ? "Edit Income/Expense" : "Add Income/Expense"}
-                </h4>
-                <form onSubmit={handleSaveIe} className="space-y-3">
-                  <div className="flex flex-wrap gap-3">
-                    <select
-                      value={ieForm.ie_type}
-                      onChange={(e) => handleIeChange("ie_type", e.target.value)}
-                      className="px-3 py-2 border rounded-lg"
+              {settingsTab === "liabilities" && (
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-lg font-medium">Liabilities</h4>
+                    <button
+                      onClick={() => {
+                        setEditingItemId(null);
+                        setItemForm({ name: "", item_type: "liability", liquidity: "fixed", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "" });
+                      }}
+                      className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
                     >
-                      <option value="income">Income</option>
-                      <option value="expense">Expense</option>
-                    </select>
+                      + Add Liability
+                    </button>
+                  </div>
+                  <form onSubmit={handleSaveItem} className="space-y-3 mb-6 p-4 bg-gray-50 rounded-lg">
+                    <div className="flex flex-wrap gap-3">
+                      <input
+                        type="text"
+                        placeholder="Name"
+                        value={itemForm.name}
+                        onChange={(e) => handleItemChange("name", e.target.value)}
+                        className="px-3 py-2 border rounded-lg flex-1 min-w-[150px]"
+                      />
+                      <select
+                        value={itemForm.liquidity}
+                        onChange={(e) => handleItemChange("liquidity", e.target.value)}
+                        className="px-3 py-2 border rounded-lg"
+                      >
+                        {LIABILITY_LIQUIDITY_TYPES.map((t) => (
+                          <option key={t.value} value={t.value}>{t.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        {editingItemId ? "Update" : "Add"}
+                      </button>
+                      {editingItemId && (
+                        <button type="button" onClick={handleCancelItemEdit} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400">
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                  {(["liquid", "fixed"] as const).map((liquidity) => {
+                    const allGroupItems = items.filter((i) => i.item_type === "liability" && i.liquidity === liquidity);
+                    if (allGroupItems.length === 0) return null;
+                    const groupKey = `liability-${liquidity}`;
+                    const groupItems = getOrderedItems(allGroupItems, groupKey);
+                    return (
+                      <div key={groupKey} className="mb-2 border rounded-lg">
+                        <button
+                          onClick={() => toggleGroup(groupKey)}
+                          className="w-full flex items-center justify-between px-3 py-2 hover:bg-gray-50"
+                        >
+                          <span className="font-medium capitalize">{liquidity} ({groupItems.length})</span>
+                          <span>{expandedGroups[groupKey] ? "▼" : "▶"}</span>
+                        </button>
+                        {expandedGroups[groupKey] && (
+                          <DndContext collisionDetection={closestCenter} onDragEnd={(e) => handleDragEnd(e, groupKey, groupItems)}>
+                            <SortableContext items={groupItems.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+                              <div className="border-t px-3 py-2 space-y-2">
+                                {groupItems.map((item) => (
+                                      <SortableItem
+                                        key={item.id}
+                                        item={item}
+                                      />
+                                ))}
+                              </div>
+                            </SortableContext>
+                          </DndContext>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {items.filter((i) => i.item_type === "liability").length === 0 && (
+                    <p className="text-gray-500 text-center py-4">No liabilities yet. Add one above.</p>
+                  )}
+                </div>
+              )}
+
+              {settingsTab === "income" && (
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-lg font-medium">Income</h4>
+                    <button
+                      onClick={() => startAddIe("income", false)}
+                      className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+                    >
+                      + Add Income
+                    </button>
+                  </div>
+                  <form onSubmit={handleSaveIe} className="space-y-3 mb-6 p-4 bg-gray-50 rounded-lg">
                     <input
                       type="text"
                       placeholder="Name"
                       value={ieForm.name}
                       onChange={(e) => handleIeChange("name", e.target.value)}
-                      className="px-3 py-2 border rounded-lg flex-1 min-w-[150px]"
+                      className="px-3 py-2 border rounded-lg w-full"
                     />
-                  </div>
-                  <div className="flex flex-wrap gap-3">
-                    <select
-                      value={ieForm.frequency}
-                      onChange={(e) => handleIeChange("frequency", e.target.value)}
-                      className="px-3 py-2 border rounded-lg"
-                    >
-                      {FREQUENCY_OPTIONS.map((f) => (
-                        <option key={f.value} value={f.value}>
-                          {f.label}
-                        </option>
-                      ))}
-                    </select>
-                    <input
-                      type="number"
-                      placeholder="Appreciation Rate (%)"
-                      value={ieForm.appreciation_rate}
-                      onChange={(e) => handleIeChange("appreciation_rate", e.target.value)}
-                      className="px-3 py-2 border rounded-lg w-48"
-                    />
-                    {ieForm.appreciation_rate && (
+                    <div className="flex flex-wrap gap-3">
                       <select
-                        value={ieForm.appreciation_frequency}
-                        onChange={(e) => handleIeChange("appreciation_frequency", e.target.value)}
+                        value={ieForm.frequency}
+                        onChange={(e) => handleIeChange("frequency", e.target.value)}
                         className="px-3 py-2 border rounded-lg"
                       >
-                        {APPRECIATION_FREQUENCIES.map((f) => (
-                          <option key={f.value} value={f.value}>
-                            {f.label}
-                          </option>
+                        {FREQUENCY_OPTIONS.map((f) => (
+                          <option key={f.value} value={f.value}>{f.label}</option>
                         ))}
                       </select>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-3">
-                    <div className="flex gap-1 items-center">
-                      <span className="text-sm text-gray-600">Start:</span>
                       <input
                         type="number"
-                        placeholder="Month"
-                        value={ieForm.start_month}
-                        onChange={(e) => handleIeChange("start_month", e.target.value)}
-                        className="px-2 py-1 border rounded-lg w-16"
-                        min={1}
-                        max={12}
+                        placeholder="Appreciation Rate (%)"
+                        value={ieForm.appreciation_rate}
+                        onChange={(e) => handleIeChange("appreciation_rate", e.target.value)}
+                        className="px-3 py-2 border rounded-lg w-48"
                       />
-                      <input
-                        type="number"
-                        placeholder="Year"
-                        value={ieForm.start_year}
-                        onChange={(e) => handleIeChange("start_year", e.target.value)}
-                        className="px-2 py-1 border rounded-lg w-20"
-                      />
+                      {ieForm.appreciation_rate && (
+                        <select
+                          value={ieForm.appreciation_frequency}
+                          onChange={(e) => handleIeChange("appreciation_frequency", e.target.value)}
+                          className="px-3 py-2 border rounded-lg"
+                        >
+                          {APPRECIATION_FREQUENCIES.map((f) => (
+                            <option key={f.value} value={f.value}>{f.label}</option>
+                          ))}
+                        </select>
+                      )}
                     </div>
-                    <div className="flex gap-1 items-center">
-                      <span className="text-sm text-gray-600">End:</span>
-                      <input
-                        type="number"
-                        placeholder="Month"
-                        value={ieForm.end_month}
-                        onChange={(e) => handleIeChange("end_month", e.target.value)}
-                        className="px-2 py-1 border rounded-lg w-16"
-                        min={1}
-                        max={12}
-                      />
-                      <input
-                        type="number"
-                        placeholder="Year"
-                        value={ieForm.end_year}
-                        onChange={(e) => handleIeChange("end_year", e.target.value)}
-                        className="px-2 py-1 border rounded-lg w-20"
-                      />
+                    <div className="flex gap-1 items-center flex-wrap">
+                      <span className="text-sm text-gray-600 mr-2">Valid period:</span>
+                      <input type="number" placeholder="From M" value={ieForm.start_month} onChange={(e) => handleIeChange("start_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
+                      <input type="number" placeholder="Y" value={ieForm.start_year} onChange={(e) => handleIeChange("start_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
+                      <span className="text-gray-400 mx-1">to</span>
+                      <input type="number" placeholder="M" value={ieForm.end_month} onChange={(e) => handleIeChange("end_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
+                      <input type="number" placeholder="Y" value={ieForm.end_year} onChange={(e) => handleIeChange("end_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
                     </div>
-                  </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="submit"
-                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-                    >
-                      {editingIeId ? "Update" : "Add"}
-                    </button>
-                    {editingIeId && (
-                      <button
-                        type="button"
-                        onClick={handleCancelIeEdit}
-                        className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400"
-                      >
-                        Cancel
+                    <div className="flex gap-2">
+                      <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        {editingIeId ? "Update" : "Add"}
                       </button>
-                    )}
-                  </div>
-                </form>
-              </div>
+                      {editingIeId && (
+                        <button type="button" onClick={handleCancelIeEdit} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400">
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                  {(() => {
+                    const incomeItems = incomeExpenses.filter((i) => i.ie_type === "income");
+                    const ordered = getOrderedIeItems(incomeItems);
+                    if (ordered.length === 0) return <p className="text-gray-500 text-center py-4">No income items yet. Add one above.</p>;
+                    return (
+                      <DndContext collisionDetection={closestCenter} onDragEnd={(e) => handleIeDragEnd(e, ordered)}>
+                        <SortableContext items={ordered.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+                          <div className="space-y-2">
+                            {ordered.map((ie) => (
+                              <div key={ie.id} className="border rounded-lg p-3">
+                                <SortableIeItem ie={ie} />
+                              </div>
+                            ))}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
+                    );
+                  })()}
+                </div>
+              )}
 
-              <div className={`mb-6 ${settingsTab !== "income" ? "hidden" : ""}`}>
-                <h4 className="text-lg font-medium mb-3">Defined Income/Expenses</h4>
-                {incomeExpenses.length === 0 ? (
-                  <p className="text-gray-500 text-center py-4">
-                    No income/expenses defined yet. Add your first one above.
-                  </p>
-                ) : (
-                  <>
-                    <div className="mb-4">
-                      <h5 className="text-md font-semibold mb-2">Income</h5>
-                      {incomeExpenses.filter((i) => i.ie_type === "income").map((ie) => (
-                        <div key={ie.id} className="flex items-center justify-between px-3 py-2 border rounded mb-2">
-                          <div>
-                            <span className="font-medium">{ie.name}</span>
-                            <span className="text-sm text-gray-500 ml-2">
-                              ({FREQUENCY_OPTIONS.find((f) => f.value === ie.frequency)?.label})
-                            </span>
-                          </div>
-                          <div className="flex gap-2">
-                            <button onClick={() => handleEditIe(ie)} className="text-blue-600 hover:text-blue-800 text-sm">Edit</button>
-                            <button onClick={() => handleDeleteIe(ie.id)} className="text-red-600 hover:text-red-800 text-sm">Delete</button>
-                          </div>
-                        </div>
-                      ))}
+              {settingsTab === "regular_expenses" && (
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-lg font-medium">Regular Expenses</h4>
+                    <button
+                      onClick={() => startAddIe("expense", false)}
+                      className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+                    >
+                      + Add Expense
+                    </button>
+                  </div>
+                  <form onSubmit={handleSaveIe} className="space-y-3 mb-6 p-4 bg-gray-50 rounded-lg">
+                    <input
+                      type="text"
+                      placeholder="Name"
+                      value={ieForm.name}
+                      onChange={(e) => handleIeChange("name", e.target.value)}
+                      className="px-3 py-2 border rounded-lg w-full"
+                    />
+                    <div className="flex flex-wrap gap-3">
+                      <select
+                        value={ieForm.frequency}
+                        onChange={(e) => handleIeChange("frequency", e.target.value)}
+                        className="px-3 py-2 border rounded-lg"
+                      >
+                        {FREQUENCY_OPTIONS.map((f) => (
+                          <option key={f.value} value={f.value}>{f.label}</option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        placeholder="Appreciation Rate (%)"
+                        value={ieForm.appreciation_rate}
+                        onChange={(e) => handleIeChange("appreciation_rate", e.target.value)}
+                        className="px-3 py-2 border rounded-lg w-48"
+                      />
+                      {ieForm.appreciation_rate && (
+                        <select
+                          value={ieForm.appreciation_frequency}
+                          onChange={(e) => handleIeChange("appreciation_frequency", e.target.value)}
+                          className="px-3 py-2 border rounded-lg"
+                        >
+                          {APPRECIATION_FREQUENCIES.map((f) => (
+                            <option key={f.value} value={f.value}>{f.label}</option>
+                          ))}
+                        </select>
+                      )}
                     </div>
-                    <div>
-                      <h5 className="text-md font-semibold mb-2">Expenses</h5>
-                      {incomeExpenses.filter((i) => i.ie_type === "expense").map((ie) => (
-                        <div key={ie.id} className="flex items-center justify-between px-3 py-2 border rounded mb-2">
-                          <div>
-                            <span className="font-medium">{ie.name}</span>
-                            <span className="text-sm text-gray-500 ml-2">
-                              ({FREQUENCY_OPTIONS.find((f) => f.value === ie.frequency)?.label})
-                            </span>
-                          </div>
-                          <div className="flex gap-2">
-                            <button onClick={() => handleEditIe(ie)} className="text-blue-600 hover:text-blue-800 text-sm">Edit</button>
-                            <button onClick={() => handleDeleteIe(ie.id)} className="text-red-600 hover:text-red-800 text-sm">Delete</button>
-                          </div>
-                        </div>
-                      ))}
+                    <div className="flex gap-1 items-center flex-wrap">
+                      <span className="text-sm text-gray-600 mr-2">Valid period:</span>
+                      <input type="number" placeholder="From M" value={ieForm.start_month} onChange={(e) => handleIeChange("start_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
+                      <input type="number" placeholder="Y" value={ieForm.start_year} onChange={(e) => handleIeChange("start_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
+                      <span className="text-gray-400 mx-1">to</span>
+                      <input type="number" placeholder="M" value={ieForm.end_month} onChange={(e) => handleIeChange("end_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
+                      <input type="number" placeholder="Y" value={ieForm.end_year} onChange={(e) => handleIeChange("end_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
                     </div>
-                  </>
-                )}
-              </div>
+                    <div className="flex gap-2">
+                      <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        {editingIeId ? "Update" : "Add"}
+                      </button>
+                      {editingIeId && (
+                        <button type="button" onClick={handleCancelIeEdit} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400">
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                  {(() => {
+                    const regularExpenses = incomeExpenses.filter((i) => i.ie_type === "expense" && !i.interest_rate);
+                    const ordered = getOrderedIeItems(regularExpenses);
+                    if (ordered.length === 0) return <p className="text-gray-500 text-center py-4">No regular expenses yet. Add one above.</p>;
+                    return (
+                      <DndContext collisionDetection={closestCenter} onDragEnd={(e) => handleIeDragEnd(e, ordered)}>
+                        <SortableContext items={ordered.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+                          <div className="space-y-2">
+                            {ordered.map((ie) => (
+                              <div key={ie.id} className="border rounded-lg p-3">
+                                <SortableIeItem ie={ie} />
+                              </div>
+                            ))}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {settingsTab === "loan_expenses" && (
+                <div>
+                  <div className="flex justify-between items-center mb-3">
+                    <h4 className="text-lg font-medium">Loan Expenses</h4>
+                    <button
+                      onClick={() => startAddIe("expense", true)}
+                      className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
+                    >
+                      + Add Loan
+                    </button>
+                  </div>
+                  <form onSubmit={handleSaveIe} className="space-y-3 mb-6 p-4 bg-gray-50 rounded-lg">
+                    <div className="flex flex-wrap gap-3">
+                      <input
+                        type="text"
+                        placeholder="Loan Name"
+                        value={ieForm.name}
+                        onChange={(e) => handleIeChange("name", e.target.value)}
+                        className="px-3 py-2 border rounded-lg flex-1 min-w-[150px]"
+                      />
+                      <input
+                        type="number"
+                        placeholder="Interest Rate (%)"
+                        value={ieForm.interest_rate}
+                        onChange={(e) => handleIeChange("interest_rate", e.target.value)}
+                        className="px-3 py-2 border rounded-lg w-40"
+                        step="0.01"
+                      />
+                    </div>
+                    <div className="flex gap-1 items-center flex-wrap">
+                      <span className="text-sm text-gray-600 mr-2">EMI Start:</span>
+                      <input type="number" placeholder="Month" value={ieForm.emi_start_month} onChange={(e) => handleIeChange("emi_start_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
+                      <input type="number" placeholder="Year" value={ieForm.emi_start_year} onChange={(e) => handleIeChange("emi_start_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
+                      <span className="text-sm text-gray-600 mx-2">EMI End:</span>
+                      <input type="number" placeholder="Month" value={ieForm.emi_end_month} onChange={(e) => handleIeChange("emi_end_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
+                      <input type="number" placeholder="Year" value={ieForm.emi_end_year} onChange={(e) => handleIeChange("emi_end_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <div className="flex gap-1 items-center">
+                        <span className="text-sm text-gray-600">Balance:</span>
+                        <input
+                          type="number"
+                          placeholder="Balance Disbursed"
+                          value={ieForm.balance_disbursed}
+                          onChange={(e) => handleIeChange("balance_disbursed", e.target.value)}
+                          className="px-2 py-1 border rounded-lg w-40"
+                        />
+                      </div>
+                      <div className="flex gap-1 items-center">
+                        <span className="text-sm text-gray-600">Against Asset:</span>
+                        <select
+                          value={ieForm.associated_asset_id}
+                          onChange={(e) => handleIeChange("associated_asset_id", e.target.value)}
+                          className="px-2 py-1 border rounded-lg"
+                        >
+                          <option value="">None</option>
+                          {items.filter((i) => i.item_type === "asset").map((asset) => (
+                            <option key={asset.id} value={asset.id}>{asset.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    <div className="flex gap-1 items-center flex-wrap">
+                      <span className="text-sm text-gray-600 mr-2">Valid period:</span>
+                      <input type="number" placeholder="From M" value={ieForm.start_month} onChange={(e) => handleIeChange("start_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
+                      <input type="number" placeholder="Y" value={ieForm.start_year} onChange={(e) => handleIeChange("start_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
+                      <span className="text-gray-400 mx-1">to</span>
+                      <input type="number" placeholder="M" value={ieForm.end_month} onChange={(e) => handleIeChange("end_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
+                      <input type="number" placeholder="Y" value={ieForm.end_year} onChange={(e) => handleIeChange("end_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                        {editingIeId ? "Update" : "Add"}
+                      </button>
+                      {editingIeId && (
+                        <button type="button" onClick={handleCancelIeEdit} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400">
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </form>
+                  {(() => {
+                    const loanExpenses = incomeExpenses.filter((i) => i.ie_type === "expense" && !!i.interest_rate);
+                    const ordered = getOrderedIeItems(loanExpenses);
+                    if (ordered.length === 0) return <p className="text-gray-500 text-center py-4">No loan expenses yet. Add one above.</p>;
+                    return (
+                      <DndContext collisionDetection={closestCenter} onDragEnd={(e) => handleIeDragEnd(e, ordered)}>
+                        <SortableContext items={ordered.map((i) => i.id)} strategy={verticalListSortingStrategy}>
+                          <div className="space-y-2">
+                            {ordered.map((ie) => (
+                              <div key={ie.id} className="border rounded-lg p-3">
+                                <SortableIeItem ie={ie} />
+                              </div>
+                            ))}
+                          </div>
+                        </SortableContext>
+                      </DndContext>
+                    );
+                  })()}
+                </div>
+              )}
 
               <div className="mt-6 pt-4 border-t">
                 <button

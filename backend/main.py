@@ -37,6 +37,63 @@ with engine.connect() as conn:
         except Exception:
             pass
 
+    for col, col_type in [
+        ("interest_rate", "REAL"),
+        ("emi_start_month", "INTEGER"),
+        ("emi_start_year", "INTEGER"),
+        ("emi_end_month", "INTEGER"),
+        ("emi_end_year", "INTEGER"),
+        ("balance_disbursed", "REAL"),
+        ("associated_asset_id", "INTEGER"),
+    ]:
+        try:
+            conn.execute(
+                text(f"ALTER TABLE income_expenses ADD COLUMN {col} {col_type}")
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+    try:
+        conn.execute(
+            text("ALTER TABLE income_expenses DROP COLUMN IF EXISTS total_loan_amount")
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(
+            text("ALTER TABLE income_expenses DROP COLUMN IF EXISTS tenure_months")
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(
+            text(
+                "ALTER TABLE income_expenses DROP COLUMN IF EXISTS bank_contribution_till_date"
+            )
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(
+            text("ALTER TABLE income_expenses DROP COLUMN IF EXISTS tagged_od_account")
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(text("DROP TABLE IF EXISTS bank_contributions"))
+        conn.commit()
+    except Exception:
+        pass
+
 app = FastAPI(title="Fintopia API")
 
 app.add_middleware(
@@ -201,6 +258,7 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
     retirement_assets = 0.0
     property_assets = 0.0
     fixed_liabilities = 0.0
+    loan_liabilities = 0.0
 
     for item in items:
         value = value_map.get(item.id, 0.0)
@@ -242,16 +300,67 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
             continue
         if not applies_this_month(item, month):
             continue
-        value = ie_value_map.get(item.id, 0.0)
+
         if item.ie_type == "income":
+            value = ie_value_map.get(item.id, 0.0)
             total_income += value
         elif item.ie_type == "expense":
-            total_expense += value
+            if item.interest_rate and item.emi_start_month and item.emi_start_year:
+                is_pre_emi = (year < item.emi_start_year) or (
+                    year == item.emi_start_year and month < item.emi_start_month
+                )
+                is_active_emi = (year > item.emi_start_year) or (
+                    year == item.emi_start_year and month >= item.emi_start_month
+                )
+                has_ended = (
+                    item.emi_end_year
+                    and item.emi_end_month
+                    and (
+                        (year > item.emi_end_year)
+                        or (year == item.emi_end_year and month > item.emi_end_month)
+                    )
+                )
+                if has_ended:
+                    continue
+
+                loan_value = value_map.get(item.id, item.balance_disbursed or 0)
+
+                if is_pre_emi:
+                    if loan_value > 0:
+                        interest = loan_value * (item.interest_rate / 100) / 12
+                        total_expense += interest
+                elif is_active_emi:
+                    P = loan_value
+                    annual_rate = item.interest_rate
+                    monthly_rate = annual_rate / 100 / 12
+                    if item.emi_end_year and item.emi_end_month:
+                        total_months = (
+                            item.emi_end_year - item.emi_start_year
+                        ) * 12 + (item.emi_end_month - item.emi_start_month)
+                        elapsed_months = (year - item.emi_start_year) * 12 + (
+                            month - item.emi_start_month
+                        )
+                        n = max(1, total_months - elapsed_months)
+                    else:
+                        n = 1
+                        monthly_rate = 0
+                    if P > 0 and monthly_rate > 0 and n > 0:
+                        emi = (
+                            P
+                            * monthly_rate
+                            * ((1 + monthly_rate) ** n)
+                            / (((1 + monthly_rate) ** n) - 1)
+                        )
+                        total_expense += emi
+                    loan_liabilities += P
+            else:
+                value = ie_value_map.get(item.id, 0.0)
+                total_expense += value
 
     total_assets = (
         current_assets + semi_liquid_assets + retirement_assets + property_assets
     )
-    total_liabilities = liquid_liabilities + fixed_liabilities
+    total_liabilities = liquid_liabilities + fixed_liabilities + loan_liabilities
     net_worth = total_assets - total_liabilities
     net_cashflow = total_income - total_expense
     net_cash = (current_assets + semi_liquid_assets) - liquid_liabilities + net_cashflow
@@ -265,6 +374,7 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
         retirement_assets=retirement_assets,
         property_assets=property_assets,
         fixed_liabilities=fixed_liabilities,
+        loan_liabilities=loan_liabilities,
         total_income=total_income,
         total_expense=total_expense,
         net_cashflow=net_cashflow,
@@ -323,6 +433,13 @@ def update_income_expense(
     db_item.end_month = item.end_month
     db_item.end_year = item.end_year
     db_item.order = item.order
+    db_item.interest_rate = item.interest_rate
+    db_item.emi_start_month = item.emi_start_month
+    db_item.emi_start_year = item.emi_start_year
+    db_item.emi_end_month = item.emi_end_month
+    db_item.emi_end_year = item.emi_end_year
+    db_item.balance_disbursed = item.balance_disbursed
+    db_item.associated_asset_id = item.associated_asset_id
     db.commit()
     db.refresh(db_item)
     return db_item
@@ -376,3 +493,53 @@ def save_income_expense_values(
 
     db.commit()
     return {"message": "Income/Expense values saved"}
+
+
+@app.get("/loan-outstanding-balance/{month}/{year}")
+def get_loan_outstanding_balance(month: int, year: int, db: Session = Depends(get_db)):
+    loans = (
+        db.query(IncomeExpenseModel)
+        .filter(IncomeExpenseModel.interest_rate.isnot(None))
+        .all()
+    )
+    loan_ids = [l.id for l in loans]
+    values = (
+        db.query(MonthValueModel)
+        .filter(
+            and_(
+                MonthValueModel.month == month,
+                MonthValueModel.year == year,
+                MonthValueModel.item_id.in_(loan_ids),
+            )
+        )
+        .all()
+    )
+    return {v.item_id: v.value for v in values}
+
+
+@app.put("/loan-outstanding-balance/{month}/{year}")
+def save_loan_outstanding_balance(
+    month: int, year: int, data: dict, db: Session = Depends(get_db)
+):
+    for item_id_str, value in data.items():
+        item_id = int(item_id_str)
+        existing = (
+            db.query(MonthValueModel)
+            .filter(
+                and_(
+                    MonthValueModel.month == month,
+                    MonthValueModel.year == year,
+                    MonthValueModel.item_id == item_id,
+                )
+            )
+            .first()
+        )
+        if existing:
+            existing.value = value
+        else:
+            new_value = MonthValueModel(
+                month=month, year=year, item_id=item_id, value=value
+            )
+            db.add(new_value)
+    db.commit()
+    return {"message": "Loan outstanding balances saved"}

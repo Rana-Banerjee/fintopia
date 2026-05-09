@@ -25,6 +25,13 @@ export interface IncomeExpense {
   end_month: number | null;
   end_year: number | null;
   order: number;
+  interest_rate: number | null;
+  emi_start_month: number | null;
+  emi_start_year: number | null;
+  emi_end_month: number | null;
+  emi_end_year: number | null;
+  balance_disbursed: number | null;
+  associated_asset_id: number | null;
 }
 
 export interface Summary {
@@ -36,6 +43,7 @@ export interface Summary {
   retirement_assets: number;
   property_assets: number;
   fixed_liabilities: number;
+  loan_liabilities: number;
   total_income: number;
   total_expense: number;
   net_cashflow: number;
@@ -161,5 +169,25 @@ export async function saveIncomeExpenseValues(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(values),
+  });
+}
+
+export async function getLoanOutstandingBalances(
+  month: number,
+  year: number
+): Promise<Record<number, number>> {
+  const res = await fetch(`${API_BASE}/loan-outstanding-balance/${month}/${year}`);
+  return res.json();
+}
+
+export async function saveLoanOutstandingBalances(
+  month: number,
+  year: number,
+  balances: Record<number, number>
+): Promise<void> {
+  await fetch(`${API_BASE}/loan-outstanding-balance/${month}/${year}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(balances),
   });
 }

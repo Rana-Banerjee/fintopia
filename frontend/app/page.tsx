@@ -1222,7 +1222,9 @@ export default function Home() {
                                 ? loan.is_fixed_emi && loan.fixed_emi_amount
                                   ? loan.fixed_emi_amount
                                   : computeLoanEmi(outstanding, loan.interest_rate ?? 0, loan.emi_end_month, loan.emi_end_year, loan.emi_start_month ?? 1, loan.emi_start_year ?? 2026, month, selectedMonthTab?.year ?? 2026)
-                                : null;
+                                : phase === "pre_emi"
+                                  ? outstanding * (loan.interest_rate ?? 0) / 1200
+                                  : null;
                               return (
                                 <tr key={loan.id} className="border-b border-purple-100 last:border-b-0">
                                   <td className="py-1.5 font-medium text-gray-700">{loan.name}</td>

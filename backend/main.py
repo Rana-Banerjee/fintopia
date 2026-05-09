@@ -355,11 +355,11 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
 
                 if is_pre_emi:
                     if loan_value > 0:
-                        interest = loan_value * (item.interest_rate / 100) / 12
+                        interest = round(loan_value * (item.interest_rate / 100) / 12)
                         loan_interest += interest
                 elif is_active_emi:
-                    loan_emi += item.fixed_emi_amount or 0
-                loan_liabilities += loan_value
+                    loan_emi += round(item.fixed_emi_amount or 0)
+                loan_liabilities += round(loan_value)
             else:
                 value = ie_value_map.get(item.id, 0.0)
                 total_expense += value

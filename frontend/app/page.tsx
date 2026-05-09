@@ -366,7 +366,8 @@ export default function Home() {
   async function handleSaveIe(e: React.FormEvent) {
     e.preventDefault();
     if (!ieForm.name) return;
-    if (ieForm.ie_type === "expense" && !ieForm.interest_rate) {
+    const isLoan = ieForm.interest_rate || ieForm.emi_start_month;
+    if (ieForm.ie_type === "expense" && isLoan && !ieForm.interest_rate) {
       alert("Interest rate is required for loans.");
       return;
     }
@@ -858,7 +859,7 @@ export default function Home() {
     }
     if (n <= 0 || monthlyRate <= 0) return null;
     const emi = P * monthlyRate * (Math.pow(1 + monthlyRate, n)) / (Math.pow(1 + monthlyRate, n) - 1);
-    return Math.round(emi * 100) / 100;
+    return Math.round(emi);
   }
 
   function getLoanPhase(loan: IncomeExpense, month: number, year: number): "pre_emi" | "active" | "ended" {
@@ -874,8 +875,8 @@ export default function Home() {
   const month = selectedMonthTab?.month ?? 1;
   const applicableIncome = incomeExpenses.filter(i => i.ie_type === "income" && isIeApplicable(i.frequency, month));
   const applicableExpenses = incomeExpenses.filter(i => i.ie_type === "expense" && isIeApplicable(i.frequency, month) && !i.interest_rate);
-  const incomeSum = applicableIncome.reduce((sum, ie) => sum + (ieValues[ie.id] ?? 0), 0);
-  const expenseSum = applicableExpenses.reduce((sum, ie) => sum + (ieValues[ie.id] ?? 0), 0);
+  const incomeSum = applicableIncome.reduce((sum, ie) => sum + Math.round(ieValues[ie.id] ?? 0), 0);
+  const expenseSum = applicableExpenses.reduce((sum, ie) => sum + Math.round(ieValues[ie.id] ?? 0), 0);
   const assetsTotal = orderedAssetItems.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
   const liabilitiesTotal = orderedLiabilityItems.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
 
@@ -884,7 +885,7 @@ export default function Home() {
     const phase = getLoanPhase(loan, month, selectedMonthTab?.year ?? 2026);
     return phase !== "ended";
   });
-  const loansTotal = visibleLoans.reduce((sum, loan) => sum + (loanBalances[loan.id] ?? loan.balance_disbursed ?? 0), 0);
+  const loansTotal = visibleLoans.reduce((sum, loan) => sum + Math.round(loanBalances[loan.id] ?? loan.balance_disbursed ?? 0), 0);
 
   const sortedSnapshots = [...snapshots].sort((a, b) => {
     if (a.year !== b.year) return b.year - a.year;
@@ -1223,7 +1224,7 @@ export default function Home() {
                                   ? loan.fixed_emi_amount
                                   : computeLoanEmi(outstanding, loan.interest_rate ?? 0, loan.emi_end_month, loan.emi_end_year, loan.emi_start_month ?? 1, loan.emi_start_year ?? 2026, month, selectedMonthTab?.year ?? 2026)
                                 : phase === "pre_emi"
-                                  ? outstanding * (loan.interest_rate ?? 0) / 1200
+                                  ? Math.round(outstanding * (loan.interest_rate ?? 0) / 1200)
                                   : null;
                               return (
                                 <tr key={loan.id} className="border-b border-purple-100 last:border-b-0">

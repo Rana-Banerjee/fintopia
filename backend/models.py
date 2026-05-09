@@ -6,7 +6,7 @@ from database import Base
 class Item(Base):
     __tablename__ = "items"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     item_type = Column(String, nullable=False)
     liquidity = Column(String, nullable=True)
@@ -26,7 +26,7 @@ class MonthValue(Base):
     id = Column(Integer, primary_key=True, index=True)
     month = Column(Integer, nullable=False)
     year = Column(Integer, nullable=False)
-    item_id = Column(Integer, ForeignKey("items.id"), nullable=False)
+    item_id = Column(String, ForeignKey("items.id"), nullable=False)
     value = Column(Float, nullable=False)
 
     item = relationship("Item", back_populates="values")
@@ -35,7 +35,7 @@ class MonthValue(Base):
 class IncomeExpense(Base):
     __tablename__ = "income_expenses"
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(String, primary_key=True)
     name = Column(String, nullable=False)
     ie_type = Column(String, nullable=False)
     frequency = Column(String, nullable=False)
@@ -52,7 +52,7 @@ class IncomeExpense(Base):
     emi_end_month = Column(Integer, nullable=True)
     emi_end_year = Column(Integer, nullable=True)
     balance_disbursed = Column(Float, nullable=True)
-    associated_asset_id = Column(Integer, ForeignKey("items.id"), nullable=True)
+    associated_asset_id = Column(String, ForeignKey("items.id"), nullable=True)
     is_fixed_emi = Column(Boolean, default=False)
     fixed_emi_amount = Column(Float, nullable=True)
 
@@ -66,7 +66,7 @@ class IncomeExpenseValue(Base):
     id = Column(Integer, primary_key=True, index=True)
     month = Column(Integer, nullable=False)
     year = Column(Integer, nullable=False)
-    item_id = Column(Integer, ForeignKey("income_expenses.id"), nullable=False)
+    item_id = Column(String, ForeignKey("income_expenses.id"), nullable=False)
     value = Column(Float, nullable=False)
 
     item = relationship("IncomeExpense", back_populates="values")

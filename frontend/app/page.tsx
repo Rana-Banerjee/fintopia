@@ -93,9 +93,9 @@ export default function Home() {
     is_fixed_emi: false,
     fixed_emi_amount: "",
   });
-  const [editingIeId, setEditingIeId] = useState<number | null>(null);
-  const [ieValues, setIeValues] = useState<Record<number, number>>({});
-  const [loanBalances, setLoanBalances] = useState<Record<number, number>>({});
+  const [editingIeId, setEditingIeId] = useState<string | null>(null);
+  const [ieValues, setIeValues] = useState<Record<string, number>>({});
+  const [loanBalances, setLoanBalances] = useState<Record<string, number>>({});
 
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
@@ -114,14 +114,14 @@ export default function Home() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"assets" | "liabilities" | "income" | "regular_expenses" | "loan_expenses">("assets");
-  const [itemOrder, setItemOrder] = useState<Record<string, number[]>>(() => {
+  const [itemOrder, setItemOrder] = useState<Record<string, string[]>>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("itemOrder");
       if (saved) return JSON.parse(saved);
     }
     return {};
   });
-  const [ieOrder, setIeOrder] = useState<number[]>(() => {
+  const [ieOrder, setIeOrder] = useState<string[]>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("ieOrder");
       if (saved) return JSON.parse(saved);
@@ -166,9 +166,9 @@ export default function Home() {
     end_month: "",
     end_year: "",
   });
-  const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
-  const [monthValues, setMonthValues] = useState<Record<number, number>>({});
+  const [monthValues, setMonthValues] = useState<Record<string, number>>({});
   const [hasChanges, setHasChanges] = useState(false);
 
   useEffect(() => {
@@ -228,7 +228,7 @@ export default function Home() {
 
   async function loadIeValues(month: number, year: number) {
     const values = await getIncomeExpenseValues(month, year);
-    const valueMap: Record<number, number> = {};
+    const valueMap: Record<string, number> = {};
     values.forEach((v) => {
       valueMap[v.item_id] = v.value;
     });
@@ -242,7 +242,7 @@ export default function Home() {
 
   async function loadMonthValues(month: number, year: number) {
     const values = await getMonthValues(month, year);
-    const valueMap: Record<number, number> = {};
+    const valueMap: Record<string, number> = {};
     values.forEach((v) => {
       valueMap[v.item_id] = v.value;
     });
@@ -251,7 +251,7 @@ export default function Home() {
       const prevMonth = month === 1 ? 12 : month - 1;
       const prevYear = month === 1 ? year - 1 : year;
       const prevValues = await getMonthValues(prevMonth, prevYear);
-      const prevValueMap: Record<number, number> = {};
+      const prevValueMap: Record<string, number> = {};
       prevValues.forEach((v) => {
         prevValueMap[v.item_id] = v.value;
       });
@@ -313,7 +313,7 @@ export default function Home() {
     fetchData();
   }
 
-  async function handleDeleteItem(id: number) {
+  async function handleDeleteItem(id: string) {
     await deleteItem(id);
     fetchData();
   }
@@ -379,7 +379,7 @@ export default function Home() {
       emi_end_month: ieForm.emi_end_month ? parseInt(ieForm.emi_end_month) : null,
       emi_end_year: ieForm.emi_end_year ? parseInt(ieForm.emi_end_year) : null,
       balance_disbursed: null,
-      associated_asset_id: ieForm.associated_asset_id ? parseInt(ieForm.associated_asset_id) : null,
+      associated_asset_id: ieForm.associated_asset_id || null,
       is_fixed_emi: ieForm.is_fixed_emi,
       fixed_emi_amount: ieForm.fixed_emi_amount ? parseFloat(ieForm.fixed_emi_amount) : null,
     };
@@ -419,7 +419,7 @@ export default function Home() {
     fetchData();
   }
 
-  async function handleDeleteIe(id: number) {
+  async function handleDeleteIe(id: string) {
     await deleteIncomeExpense(id);
     fetchData();
   }
@@ -474,17 +474,17 @@ export default function Home() {
     });
   }
 
-  function handleValueChange(itemId: number, value: string) {
+  function handleValueChange(itemId: string, value: string) {
     setMonthValues({ ...monthValues, [itemId]: parseFloat(value) || 0 });
     setHasChanges(true);
   }
 
-  function handleIeValueChange(itemId: number, value: string) {
+  function handleIeValueChange(itemId: string, value: string) {
     setIeValues({ ...ieValues, [itemId]: parseFloat(value) || 0 });
     setHasChanges(true);
   }
 
-  function handleLoanBalanceChange(loanId: number, value: string) {
+  function handleLoanBalanceChange(loanId: string, value: string) {
     setLoanBalances({ ...loanBalances, [loanId]: parseFloat(value) || 0 });
     setHasChanges(true);
   }
@@ -500,8 +500,22 @@ export default function Home() {
 
   async function handleSaveMonthValues() {
     if (!selectedMonthTab) return;
+    const fullValues: Record<string, number> = { ...monthValues };
+    orderedAssetItems.forEach(item => {
+      if (fullValues[item.id] === undefined) {
+        fullValues[item.id] = 0;
+      }
+    });
+    orderedLiabilityItems.forEach(item => {
+      if (fullValues[item.id] === undefined) {
+        fullValues[item.id] = 0;
+      }
+    });
+    allLoans.forEach(loan => {
+      delete fullValues[loan.id];
+    });
     await Promise.all([
-      saveMonthValues(selectedMonthTab.month, selectedMonthTab.year, monthValues),
+      saveMonthValues(selectedMonthTab.month, selectedMonthTab.year, fullValues),
       saveIncomeExpenseValues(selectedMonthTab.month, selectedMonthTab.year, ieValues),
       saveLoanOutstandingBalances(selectedMonthTab.month, selectedMonthTab.year, loanBalances),
     ]);
@@ -615,21 +629,19 @@ export default function Home() {
     const hasAllItems = order.length === currentItemsOrder.length && currentItemsOrder.every(id => order.includes(id));
     
     if (hasAllItems && order.length > 0) {
-      // All items in order array - use exact positions
-      const oldIndex = order.indexOf(active.id as number);
-      const newIndex = order.indexOf(over.id as number);
+      const oldIndex = order.indexOf(active.id as string);
+      const newIndex = order.indexOf(over.id as string);
       if (oldIndex !== -1 && newIndex !== -1) {
         order.splice(oldIndex, 1);
-        order.splice(newIndex, 0, active.id as number);
+        order.splice(newIndex, 0, active.id as string);
       }
     } else {
-      // Rebuild order from current display order
-      const oldIndex = currentItemsOrder.indexOf(active.id as number);
-      const newIndex = currentItemsOrder.indexOf(over.id as number);
+      const oldIndex = currentItemsOrder.indexOf(active.id as string);
+      const newIndex = currentItemsOrder.indexOf(over.id as string);
       if (oldIndex !== -1 && newIndex !== -1) {
         order = [...currentItemsOrder];
         order.splice(oldIndex, 1);
-        order.splice(newIndex, 0, active.id as number);
+        order.splice(newIndex, 0, active.id as string);
       }
     }
     
@@ -655,22 +667,22 @@ export default function Home() {
     const hasAllItems = ieOrder.length === currentOrder.length &&
       currentOrder.every(id => ieOrder.includes(id));
 
-    let newOrder: number[];
+    let newOrder: string[];
     if (hasAllItems && ieOrder.length > 0) {
       newOrder = [...ieOrder];
-      const oldIndex = newOrder.indexOf(active.id as number);
-      const newIndex = newOrder.indexOf(over.id as number);
+      const oldIndex = newOrder.indexOf(active.id as string);
+      const newIndex = newOrder.indexOf(over.id as string);
       if (oldIndex !== -1 && newIndex !== -1) {
         newOrder.splice(oldIndex, 1);
-        newOrder.splice(newIndex, 0, active.id as number);
+        newOrder.splice(newIndex, 0, active.id as string);
       }
     } else {
       newOrder = [...currentOrder];
-      const oldIndex = currentOrder.indexOf(active.id as number);
-      const newIndex = currentOrder.indexOf(over.id as number);
+      const oldIndex = currentOrder.indexOf(active.id as string);
+      const newIndex = currentOrder.indexOf(over.id as string);
       if (oldIndex !== -1 && newIndex !== -1) {
         newOrder.splice(oldIndex, 1);
-        newOrder.splice(newIndex, 0, active.id as number);
+        newOrder.splice(newIndex, 0, active.id as string);
       }
     }
 
@@ -790,7 +802,7 @@ export default function Home() {
 
   async function handleCreateMonth(month: number, year: number, copyFrom: string) {
     if (!snapshots.find((s) => s.month === month && s.year === year)) {
-      const initialValues: Record<number, number> = {};
+      const initialValues: Record<string, number> = {};
       
       if (copyFrom) {
         const [srcMonth, srcYear] = copyFrom.split("-").map(Number);

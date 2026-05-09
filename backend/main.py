@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, text
 from typing import List
+import uuid
 from database import engine, get_db, Base
 from models import (
     Item as ItemModel,
@@ -44,7 +45,7 @@ with engine.connect() as conn:
         ("emi_end_month", "INTEGER"),
         ("emi_end_year", "INTEGER"),
         ("balance_disbursed", "REAL"),
-        ("associated_asset_id", "INTEGER"),
+        ("associated_asset_id", "TEXT"),
         ("is_fixed_emi", "INTEGER"),
         ("fixed_emi_amount", "REAL"),
     ]:
@@ -109,7 +110,7 @@ app.add_middleware(
 
 @app.post("/items", response_model=ItemSchema)
 def create_item(item: ItemCreate, db: Session = Depends(get_db)):
-    db_item = ItemModel(**item.model_dump())
+    db_item = ItemModel(id=uuid.uuid4().hex, **item.model_dump())
     db.add(db_item)
     db.commit()
     db.refresh(db_item)
@@ -122,7 +123,7 @@ def get_items(db: Session = Depends(get_db)):
 
 
 @app.delete("/items/{item_id}")
-def delete_item(item_id: int, db: Session = Depends(get_db)):
+def delete_item(item_id: str, db: Session = Depends(get_db)):
     item = db.query(ItemModel).filter(ItemModel.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -133,7 +134,7 @@ def delete_item(item_id: int, db: Session = Depends(get_db)):
 
 
 @app.put("/items/{item_id}", response_model=ItemSchema)
-def update_item(item_id: int, item: ItemCreate, db: Session = Depends(get_db)):
+def update_item(item_id: str, item: ItemCreate, db: Session = Depends(get_db)):
     db_item = db.query(ItemModel).filter(ItemModel.id == item_id).first()
     if not db_item:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -153,12 +154,12 @@ def update_item(item_id: int, item: ItemCreate, db: Session = Depends(get_db)):
 
 @app.get("/month-values/{month}/{year}", response_model=MonthValuesResponse)
 def get_month_values(month: int, year: int, db: Session = Depends(get_db)):
-    loan_ids = [
+    loan_ids = {
         l.id
         for l in db.query(IncomeExpenseModel)
         .filter(IncomeExpenseModel.interest_rate.isnot(None))
         .all()
-    ]
+    }
     values = (
         db.query(MonthValueModel)
         .filter(and_(MonthValueModel.month == month, MonthValueModel.year == year))
@@ -174,7 +175,15 @@ def get_month_values(month: int, year: int, db: Session = Depends(get_db)):
 
 @app.put("/month-values/{month}/{year}")
 def save_month_values(month: int, year: int, data: dict, db: Session = Depends(get_db)):
+    loan_ids = {
+        l.id
+        for l in db.query(IncomeExpenseModel)
+        .filter(IncomeExpenseModel.interest_rate.isnot(None))
+        .all()
+    }
     for item_id, value in data.items():
+        if item_id in loan_ids:
+            continue
         existing = (
             db.query(MonthValueModel)
             .filter(
@@ -253,13 +262,21 @@ def applies_this_month(item, month):
 @app.get("/summary", response_model=Summary)
 def get_summary(month: int, year: int, db: Session = Depends(get_db)):
     items = db.query(ItemModel).all()
+
+    loan_ids = {
+        l.id
+        for l in db.query(IncomeExpenseModel)
+        .filter(IncomeExpenseModel.interest_rate.isnot(None))
+        .all()
+    }
+
     values = (
         db.query(MonthValueModel)
         .filter(and_(MonthValueModel.month == month, MonthValueModel.year == year))
         .all()
     )
 
-    value_map = {v.item_id: v.value for v in values}
+    value_map = {v.item_id: v.value for v in values if v.item_id not in loan_ids}
 
     current_assets = 0.0
     liquid_liabilities = 0.0
@@ -332,7 +349,7 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
                 if has_ended:
                     continue
 
-                loan_value = value_map.get(item.id, item.balance_disbursed or 0)
+                loan_value = ie_value_map.get(item.id, item.balance_disbursed or 0)
                 ie_value_map.pop(item.id, None)
 
                 if is_pre_emi:
@@ -398,7 +415,7 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
 
 @app.post("/income-expenses", response_model=IncomeExpenseSchema)
 def create_income_expense(item: IncomeExpenseCreate, db: Session = Depends(get_db)):
-    db_item = IncomeExpenseModel(**item.model_dump())
+    db_item = IncomeExpenseModel(id=uuid.uuid4().hex, **item.model_dump())
     db.add(db_item)
     db.commit()
     db.refresh(db_item)
@@ -417,7 +434,7 @@ def get_income_expenses(db: Session = Depends(get_db)):
 
 
 @app.delete("/income-expenses/{item_id}")
-def delete_income_expense(item_id: int, db: Session = Depends(get_db)):
+def delete_income_expense(item_id: str, db: Session = Depends(get_db)):
     item = db.query(IncomeExpenseModel).filter(IncomeExpenseModel.id == item_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -431,7 +448,7 @@ def delete_income_expense(item_id: int, db: Session = Depends(get_db)):
 
 @app.put("/income-expenses/{item_id}", response_model=IncomeExpenseSchema)
 def update_income_expense(
-    item_id: int, item: IncomeExpenseCreate, db: Session = Depends(get_db)
+    item_id: str, item: IncomeExpenseCreate, db: Session = Depends(get_db)
 ):
     db_item = (
         db.query(IncomeExpenseModel).filter(IncomeExpenseModel.id == item_id).first()
@@ -504,7 +521,7 @@ def save_income_expense_values(
             existing.value = value
         else:
             new_value = IncomeExpenseValueModel(
-                month=month, year=year, item_id=int(item_id), value=value
+                month=month, year=year, item_id=item_id, value=value
             )
             db.add(new_value)
 
@@ -521,12 +538,12 @@ def get_loan_outstanding_balance(month: int, year: int, db: Session = Depends(ge
     )
     loan_ids = [l.id for l in loans]
     values = (
-        db.query(MonthValueModel)
+        db.query(IncomeExpenseValueModel)
         .filter(
             and_(
-                MonthValueModel.month == month,
-                MonthValueModel.year == year,
-                MonthValueModel.item_id.in_(loan_ids),
+                IncomeExpenseValueModel.month == month,
+                IncomeExpenseValueModel.year == year,
+                IncomeExpenseValueModel.item_id.in_(loan_ids),
             )
         )
         .all()
@@ -538,15 +555,14 @@ def get_loan_outstanding_balance(month: int, year: int, db: Session = Depends(ge
 def save_loan_outstanding_balance(
     month: int, year: int, data: dict, db: Session = Depends(get_db)
 ):
-    for item_id_str, value in data.items():
-        item_id = int(item_id_str)
+    for item_id, value in data.items():
         existing = (
-            db.query(MonthValueModel)
+            db.query(IncomeExpenseValueModel)
             .filter(
                 and_(
-                    MonthValueModel.month == month,
-                    MonthValueModel.year == year,
-                    MonthValueModel.item_id == item_id,
+                    IncomeExpenseValueModel.month == month,
+                    IncomeExpenseValueModel.year == year,
+                    IncomeExpenseValueModel.item_id == item_id,
                 )
             )
             .first()
@@ -554,7 +570,7 @@ def save_loan_outstanding_balance(
         if existing:
             existing.value = value
         else:
-            new_value = MonthValueModel(
+            new_value = IncomeExpenseValueModel(
                 month=month, year=year, item_id=item_id, value=value
             )
             db.add(new_value)

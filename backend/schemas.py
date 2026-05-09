@@ -19,7 +19,7 @@ class ItemCreate(ItemBase):
 
 
 class Item(ItemBase):
-    id: int
+    id: str
 
     class Config:
         from_attributes = True
@@ -28,7 +28,7 @@ class Item(ItemBase):
 class MonthValueBase(BaseModel):
     month: int
     year: int
-    item_id: int
+    item_id: str
     value: float
 
 
@@ -81,7 +81,7 @@ class IncomeExpenseBase(BaseModel):
     emi_end_month: Optional[int] = None
     emi_end_year: Optional[int] = None
     balance_disbursed: Optional[float] = None
-    associated_asset_id: Optional[int] = None
+    associated_asset_id: Optional[str] = None
     is_fixed_emi: bool = False
     fixed_emi_amount: Optional[float] = None
 
@@ -91,7 +91,7 @@ class IncomeExpenseCreate(IncomeExpenseBase):
 
 
 class IncomeExpense(IncomeExpenseBase):
-    id: int
+    id: str
 
     class Config:
         from_attributes = True
@@ -100,7 +100,7 @@ class IncomeExpense(IncomeExpenseBase):
 class IncomeExpenseValueBase(BaseModel):
     month: int
     year: int
-    item_id: int
+    item_id: str
     value: float
 
 
@@ -133,7 +133,7 @@ class BankContributionCreate(BankContributionBase):
 
 class BankContribution(BankContributionBase):
     id: int
-    income_expense_id: int
+    income_expense_id: str
 
     class Config:
         from_attributes = True

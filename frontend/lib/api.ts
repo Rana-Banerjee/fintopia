@@ -1,7 +1,7 @@
 const API_BASE = "http://localhost:8000";
 
 export interface Item {
-  id: number;
+  id: string;
   name: string;
   item_type: string;
   liquidity: string | null;
@@ -14,7 +14,7 @@ export interface Item {
 }
 
 export interface IncomeExpense {
-  id: number;
+  id: string;
   name: string;
   ie_type: string;
   frequency: string;
@@ -31,7 +31,7 @@ export interface IncomeExpense {
   emi_end_month: number | null;
   emi_end_year: number | null;
   balance_disbursed: number | null;
-  associated_asset_id: number | null;
+  associated_asset_id: string | null;
   is_fixed_emi: boolean | null;
   fixed_emi_amount: number | null;
 }
@@ -70,11 +70,11 @@ export async function createItem(item: Omit<Item, "id">): Promise<Item> {
   return res.json();
 }
 
-export async function deleteItem(id: number): Promise<void> {
+export async function deleteItem(id: string): Promise<void> {
   await fetch(`${API_BASE}/items/${id}`, { method: "DELETE" });
 }
 
-export async function updateItem(id: number, item: Omit<Item, "id">): Promise<Item> {
+export async function updateItem(id: string, item: Omit<Item, "id">): Promise<Item> {
   const res = await fetch(`${API_BASE}/items/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -95,7 +95,7 @@ export async function getMonthValues(
 export async function saveMonthValues(
   month: number,
   year: number,
-  values: Record<number, number>
+  values: Record<string, number>
 ): Promise<void> {
   await fetch(`${API_BASE}/month-values/${month}/${year}`, {
     method: "PUT",
@@ -144,11 +144,11 @@ export async function createIncomeExpense(item: Omit<IncomeExpense, "id">): Prom
   return res.json();
 }
 
-export async function deleteIncomeExpense(id: number): Promise<void> {
+export async function deleteIncomeExpense(id: string): Promise<void> {
   await fetch(`${API_BASE}/income-expenses/${id}`, { method: "DELETE" });
 }
 
-export async function updateIncomeExpense(id: number, item: Omit<IncomeExpense, "id">): Promise<IncomeExpense> {
+export async function updateIncomeExpense(id: string, item: Omit<IncomeExpense, "id">): Promise<IncomeExpense> {
   const res = await fetch(`${API_BASE}/income-expenses/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
@@ -173,7 +173,7 @@ export async function getIncomeExpenseValues(
 export async function saveIncomeExpenseValues(
   month: number,
   year: number,
-  values: Record<number, number>
+  values: Record<string, number>
 ): Promise<void> {
   await fetch(`${API_BASE}/income-expenses/values/${month}/${year}`, {
     method: "PUT",
@@ -193,7 +193,7 @@ export async function getLoanOutstandingBalances(
 export async function saveLoanOutstandingBalances(
   month: number,
   year: number,
-  balances: Record<number, number>
+  balances: Record<string, number>
 ): Promise<void> {
   await fetch(`${API_BASE}/loan-outstanding-balance/${month}/${year}`, {
     method: "PUT",

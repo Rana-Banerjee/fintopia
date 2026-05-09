@@ -86,7 +86,7 @@ export async function updateItem(id: string, item: Omit<Item, "id">): Promise<It
 export async function getMonthValues(
   month: number,
   year: number
-): Promise<{ item_id: number; value: number }[]> {
+): Promise<{ item_id: string; value: number }[]> {
   const res = await fetch(`${API_BASE}/month-values/${month}/${year}`);
   const data = await res.json();
   return data.values;
@@ -164,7 +164,7 @@ export async function updateIncomeExpense(id: string, item: Omit<IncomeExpense, 
 export async function getIncomeExpenseValues(
   month: number,
   year: number
-): Promise<{ item_id: number; value: number }[]> {
+): Promise<{ item_id: string; value: number }[]> {
   const res = await fetch(`${API_BASE}/income-expenses/values/${month}/${year}`);
   const data = await res.json();
   return data.values;
@@ -185,7 +185,7 @@ export async function saveIncomeExpenseValues(
 export async function getLoanOutstandingBalances(
   month: number,
   year: number
-): Promise<Record<number, number>> {
+): Promise<Record<string, number>> {
   const res = await fetch(`${API_BASE}/loan-outstanding-balance/${month}/${year}`);
   return res.json();
 }

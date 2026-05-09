@@ -185,7 +185,10 @@ export default function Home() {
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
-    if (settingsTab === "loan_expenses") {
+    if (settingsTab === "liabilities") {
+      setEditingItemId(() => null);
+      setItemForm(prev => ({ ...prev, item_type: "liability", liquidity: "fixed" }));
+    } else if (settingsTab === "loan_expenses") {
       setEditingIeId(() => null);
       setIeForm(prev => ({ ...prev, ie_type: "expense" }));
     } else if (settingsTab === "income") {
@@ -300,8 +303,8 @@ export default function Home() {
       await createItem(payload);
       setItemForm({
         name: "",
-        item_type: "asset",
-        liquidity: "liquid",
+        item_type: itemForm.item_type,
+        liquidity: itemForm.liquidity,
         appreciation_rate: "",
         appreciation_frequency: "monthly",
         start_month: "",

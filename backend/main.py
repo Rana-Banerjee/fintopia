@@ -21,6 +21,8 @@ from schemas import (
     IncomeExpenseCreate,
     IncomeExpense as IncomeExpenseSchema,
     IncomeExpenseValuesResponse,
+    GenerateMonthsRequest,
+    GenerateMonthsResponse,
 )
 
 Base.metadata.create_all(bind=engine)
@@ -256,7 +258,47 @@ def applies_this_month(item, month):
         return month in [4, 10]
     elif freq == "yearly":
         return month == 4
-    return True
+    return False
+
+
+def get_next_month(month, year):
+    if month == 12:
+        return (1, year + 1)
+    return (month + 1, year)
+
+
+def is_appreciation_month(frequency, month):
+    if frequency == "monthly":
+        return True
+    elif frequency == "bi_monthly":
+        return month % 2 == 0
+    elif frequency == "quarterly":
+        return month in [1, 4, 7, 10]
+    elif frequency == "semi_annual":
+        return month in [4, 10]
+    elif frequency == "yearly":
+        return month == 4
+    return False
+
+
+def apply_appreciation(value, rate, frequency, month):
+    if not rate or rate == 0:
+        return value
+    if not is_appreciation_month(frequency, month):
+        return value
+    return round(value * (1 + rate / 100), 2)
+
+
+def calculate_loan_components(balance, annual_rate, fixed_emi):
+    if not balance or balance <= 0:
+        return {"interest": 0, "principal": 0, "new_balance": 0}
+    if not annual_rate or not fixed_emi:
+        return {"interest": 0, "principal": 0, "new_balance": balance}
+    monthly_rate = annual_rate / 100 / 12
+    interest = round(balance * monthly_rate, 2)
+    principal = fixed_emi - interest
+    new_balance = max(0, round(balance - principal, 2))
+    return {"interest": interest, "principal": principal, "new_balance": new_balance}
 
 
 @app.get("/summary", response_model=Summary)
@@ -553,3 +595,219 @@ def save_loan_outstanding_balance(
             db.add(new_value)
     db.commit()
     return {"message": "Loan outstanding balances saved"}
+
+
+@app.post("/generate-months/{month}/{year}", response_model=GenerateMonthsResponse)
+def generate_months(
+    month: int, year: int, request: GenerateMonthsRequest, db: Session = Depends(get_db)
+):
+    num_months = request.num_months
+    if num_months < 1:
+        num_months = 1
+    if num_months > 12:
+        num_months = 12
+
+    generated = []
+    current_month = month
+    current_year = year
+
+    loan_ids = {
+        l.id
+        for l in db.query(IncomeExpenseModel)
+        .filter(IncomeExpenseModel.interest_rate.isnot(None))
+        .all()
+    }
+
+    for _ in range(num_months):
+        source_month = current_month
+        source_year = current_year
+
+        current_month, current_year = get_next_month(current_month, current_year)
+
+        item_values = (
+            db.query(MonthValueModel)
+            .filter(
+                and_(
+                    MonthValueModel.month == source_month,
+                    MonthValueModel.year == source_year,
+                )
+            )
+            .all()
+        )
+        prev_item_values = {
+            v.item_id: v.value for v in item_values if v.item_id not in loan_ids
+        }
+
+        items = db.query(ItemModel).all()
+        for item in items:
+            if not is_active_in_month(item, current_month, current_year):
+                continue
+            if item.id in loan_ids:
+                continue
+
+            prev_value = prev_item_values.get(item.id, 0)
+            new_value = apply_appreciation(
+                prev_value,
+                item.appreciation_rate,
+                item.appreciation_frequency,
+                current_month,
+            )
+
+            existing = (
+                db.query(MonthValueModel)
+                .filter(
+                    and_(
+                        MonthValueModel.month == current_month,
+                        MonthValueModel.year == current_year,
+                        MonthValueModel.item_id == item.id,
+                    )
+                )
+                .first()
+            )
+            if existing:
+                existing.value = new_value
+            else:
+                new_val = MonthValueModel(
+                    month=current_month,
+                    year=current_year,
+                    item_id=item.id,
+                    value=new_value,
+                )
+                db.add(new_val)
+
+        ie_values = (
+            db.query(IncomeExpenseValueModel)
+            .filter(
+                and_(
+                    IncomeExpenseValueModel.month == source_month,
+                    IncomeExpenseValueModel.year == source_year,
+                )
+            )
+            .all()
+        )
+        prev_ie_values = {v.item_id: v.value for v in ie_values}
+
+        ie_items = db.query(IncomeExpenseModel).all()
+        for item in ie_items:
+            if not is_active_in_month(item, current_month, current_year):
+                continue
+
+            prev_value = prev_ie_values.get(item.id, 0)
+
+            if item.interest_rate and item.balance_disbursed:
+                comps = calculate_loan_components(
+                    prev_value, item.interest_rate, item.fixed_emi_amount or 0
+                )
+                new_value = comps["new_balance"]
+            else:
+                freq = item.appreciation_frequency
+                new_value = apply_appreciation(
+                    prev_value,
+                    item.appreciation_rate,
+                    freq,
+                    current_month,
+                )
+
+            existing = (
+                db.query(IncomeExpenseValueModel)
+                .filter(
+                    and_(
+                        IncomeExpenseValueModel.month == current_month,
+                        IncomeExpenseValueModel.year == current_year,
+                        IncomeExpenseValueModel.item_id == item.id,
+                    )
+                )
+                .first()
+            )
+            if existing:
+                existing.value = new_value
+            else:
+                new_val = IncomeExpenseValueModel(
+                    month=current_month,
+                    year=current_year,
+                    item_id=item.id,
+                    value=new_value,
+                )
+                db.add(new_val)
+
+        current_item_values = (
+            db.query(MonthValueModel)
+            .filter(
+                and_(
+                    MonthValueModel.month == current_month,
+                    MonthValueModel.year == current_year,
+                )
+            )
+            .all()
+        )
+        current_asset_values = {
+            v.item_id: v.value for v in current_item_values if v.item_id not in loan_ids
+        }
+
+        ie_items = (
+            db.query(IncomeExpenseModel)
+            .filter(IncomeExpenseModel.associated_asset_id.isnot(None))
+            .all()
+        )
+
+        for ie_item in ie_items:
+            if not is_active_in_month(ie_item, current_month, current_year):
+                continue
+            if not applies_this_month(ie_item, current_month):
+                continue
+
+            asset_id = ie_item.associated_asset_id
+            if not asset_id or asset_id in loan_ids:
+                continue
+            if asset_id not in current_asset_values:
+                continue
+
+            ie_val = (
+                db.query(IncomeExpenseValueModel)
+                .filter(
+                    and_(
+                        IncomeExpenseValueModel.month == current_month,
+                        IncomeExpenseValueModel.year == current_year,
+                        IncomeExpenseValueModel.item_id == ie_item.id,
+                    )
+                )
+                .first()
+            )
+            value = ie_val.value if ie_val else 0
+
+            if ie_item.ie_type == "income":
+                current_asset_values[asset_id] = (
+                    current_asset_values.get(asset_id, 0) + value
+                )
+            elif ie_item.ie_type == "expense":
+                current_asset_values[asset_id] = (
+                    current_asset_values.get(asset_id, 0) - value
+                )
+
+        for asset_id, asset_value in current_asset_values.items():
+            existing = (
+                db.query(MonthValueModel)
+                .filter(
+                    and_(
+                        MonthValueModel.month == current_month,
+                        MonthValueModel.year == current_year,
+                        MonthValueModel.item_id == asset_id,
+                    )
+                )
+                .first()
+            )
+            if existing:
+                existing.value = asset_value
+            else:
+                new_val = MonthValueModel(
+                    month=current_month,
+                    year=current_year,
+                    item_id=asset_id,
+                    value=asset_value,
+                )
+                db.add(new_val)
+
+        db.commit()
+        generated.append({"month": current_month, "year": current_year})
+
+    return GenerateMonthsResponse(generated=generated)

@@ -143,3 +143,11 @@ class BankContribution(BankContributionBase):
 
 class BankContributionListResponse(BaseModel):
     contributions: list[BankContribution]
+
+
+class GenerateMonthsRequest(BaseModel):
+    num_months: int = 1
+
+
+class GenerateMonthsResponse(BaseModel):
+    generated: list[dict]

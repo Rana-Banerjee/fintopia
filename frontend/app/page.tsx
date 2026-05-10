@@ -19,6 +19,7 @@ import {
   saveIncomeExpenseValues,
   getLoanOutstandingBalances,
   saveLoanOutstandingBalances,
+  generateMonths,
   Item,
   IncomeExpense,
   Summary,
@@ -111,6 +112,9 @@ export default function Home() {
   } | null>(null);
   const [copyFromSnapshot, setCopyFromSnapshot] = useState<string>("");
   const [addMonthPopoverOpen, setAddMonthPopoverOpen] = useState(false);
+  const [generateMonthOpen, setGenerateMonthOpen] = useState(false);
+  const [sourceMonth, setSourceMonth] = useState<{ month: number; year: number } | null>(null);
+  const [generateNumMonths, setGenerateNumMonths] = useState(1);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<"assets" | "liabilities" | "income" | "regular_expenses" | "loan_expenses">("assets");
@@ -1025,6 +1029,12 @@ export default function Home() {
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
               >
                 Add Month
+              </button>
+              <button
+                onClick={() => setGenerateMonthOpen(true)}
+                className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+              >
+                Generate Month
               </button>
               {hasChanges && (
                 <div className="flex items-center gap-2">
@@ -1956,6 +1966,97 @@ export default function Home() {
                   className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                 >
                   Create Month
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {generateMonthOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 w-80">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold">Generate Month</h3>
+                <button
+                  onClick={() => setGenerateMonthOpen(false)}
+                  className="text-gray-500 hover:text-gray-700 text-xl"
+                >
+                  ×
+                </button>
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Source Month
+                </label>
+                <select
+                  value={sourceMonth ? `${sourceMonth.month}-${sourceMonth.year}` : ""}
+                  onChange={(e) => {
+                    const [m, y] = e.target.value.split("-").map(Number);
+                    setSourceMonth({ month: m, year: y });
+                  }}
+                  className="w-full px-3 py-2 border rounded-lg"
+                >
+                  <option value="">Select a month</option>
+                  {snapshots.map((s) => (
+                    <option key={`${s.month}-${s.year}`} value={`${s.month}-${s.year}`}>
+                      {s.month}/{s.year}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Number of Months (1-12)
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={12}
+                  value={generateNumMonths}
+                  onChange={(e) => setGenerateNumMonths(Math.max(1, Math.min(12, parseInt(e.target.value) || 1)))}
+                  className="w-full px-3 py-2 border rounded-lg"
+                />
+              </div>
+              <div className="mb-4 text-sm text-gray-500">
+                Note: Income and expenses linked to assets will auto-adjust the asset value.
+              </div>
+              {sourceMonth && (
+                <div className="mb-4 text-sm text-gray-600">
+                  Will generate:{" "}
+                  {(() => {
+                    const months: string[] = [];
+                    let m = sourceMonth.month;
+                    let y = sourceMonth.year;
+                    for (let i = 0; i < generateNumMonths; i++) {
+                      m = m + 1;
+                      if (m > 12) { m = 1; y = y + 1; }
+                      months.push(`${m}/${y}`);
+                    }
+                    return months.join(", ");
+                  })()}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setGenerateMonthOpen(false)}
+                  className="flex-1 px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={async () => {
+                    if (!sourceMonth) return;
+                    const generated = await generateMonths(sourceMonth.month, sourceMonth.year, generateNumMonths);
+                    await fetchData();
+                    if (generated.length > 0) {
+                      setSelectedMonthTab({ month: generated[0].month, year: generated[0].year });
+                    }
+                    setGenerateMonthOpen(false);
+                  }}
+                  disabled={!sourceMonth}
+                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  Generate
                 </button>
               </div>
             </div>

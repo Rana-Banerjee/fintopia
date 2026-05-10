@@ -201,3 +201,22 @@ export async function saveLoanOutstandingBalances(
     body: JSON.stringify(balances),
   });
 }
+
+export interface GeneratedMonth {
+  month: number;
+  year: number;
+}
+
+export async function generateMonths(
+  month: number,
+  year: number,
+  numMonths: number
+): Promise<GeneratedMonth[]> {
+  const res = await fetch(`${API_BASE}/generate-months/${month}/${year}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ num_months: numMonths }),
+  });
+  const data = await res.json();
+  return data.generated;
+}

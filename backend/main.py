@@ -904,10 +904,13 @@ def generate_months(
                         MonthValueModel.item_id == asset_id,
                     )
                 )
-                .first()
+                .all()
             )
+            if len(existing) > 1:
+                for dup in existing[1:]:
+                    db.delete(dup)
             if existing:
-                existing.value = asset_value
+                existing[0].value = asset_value
             else:
                 new_val = MonthValueModel(
                     month=current_month,

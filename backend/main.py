@@ -61,6 +61,16 @@ with engine.connect() as conn:
 
     try:
         conn.execute(
+            text(
+                "ALTER TABLE income_expense_values ADD COLUMN balance_outstanding REAL"
+            )
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(
             text("ALTER TABLE income_expenses DROP COLUMN IF EXISTS total_loan_amount")
         )
         conn.commit()
@@ -286,7 +296,18 @@ def apply_appreciation(value, rate, frequency, month):
         return value
     if not is_appreciation_month(frequency, month):
         return value
-    return round(value * (1 + rate / 100), 2)
+
+    divisors = {
+        "monthly": 12,
+        "bi_monthly": 6,
+        "quarterly": 4,
+        "semi_annual": 2,
+        "yearly": 1,
+    }
+    divisor = divisors.get(frequency, 1)
+    periodic_rate = rate / divisor
+
+    return round(value * (1 + periodic_rate / 100))
 
 
 def calculate_loan_components(balance, annual_rate, fixed_emi):
@@ -295,9 +316,9 @@ def calculate_loan_components(balance, annual_rate, fixed_emi):
     if not annual_rate or not fixed_emi:
         return {"interest": 0, "principal": 0, "new_balance": balance}
     monthly_rate = annual_rate / 100 / 12
-    interest = round(balance * monthly_rate, 2)
+    interest = round(balance * monthly_rate)
     principal = fixed_emi - interest
-    new_balance = max(0, round(balance - principal, 2))
+    new_balance = max(0, round(balance - principal))
     return {"interest": interest, "principal": principal, "new_balance": new_balance}
 
 
@@ -359,6 +380,11 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
         .all()
     )
     ie_value_map = {v.item_id: v.value for v in ie_values}
+    ie_balance_map = {
+        v.item_id: v.balance_outstanding
+        for v in ie_values
+        if v.balance_outstanding is not None
+    }
 
     total_income = 0.0
     total_expense = 0.0
@@ -393,7 +419,7 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
                 if has_ended:
                     continue
 
-                loan_value = ie_value_map.get(item.id, item.balance_disbursed or 0)
+                loan_value = ie_balance_map.get(item.id) or ie_value_map.get(item.id, 0)
 
                 if is_pre_emi:
                     if loan_value > 0:
@@ -567,7 +593,12 @@ def get_loan_outstanding_balance(month: int, year: int, db: Session = Depends(ge
         )
         .all()
     )
-    return {v.item_id: v.value for v in values}
+    return {
+        v.item_id: v.balance_outstanding
+        if v.balance_outstanding is not None
+        else v.value
+        for v in values
+    }
 
 
 @app.put("/loan-outstanding-balance/{month}/{year}")
@@ -587,10 +618,14 @@ def save_loan_outstanding_balance(
             .first()
         )
         if existing:
-            existing.value = value
+            existing.balance_outstanding = value
         else:
             new_value = IncomeExpenseValueModel(
-                month=month, year=year, item_id=item_id, value=value
+                month=month,
+                year=year,
+                item_id=item_id,
+                value=0,
+                balance_outstanding=value,
             )
             db.add(new_value)
     db.commit()
@@ -601,6 +636,18 @@ def save_loan_outstanding_balance(
 def generate_months(
     month: int, year: int, request: GenerateMonthsRequest, db: Session = Depends(get_db)
 ):
+    """Generate forecasted values for a series of future months.
+
+    Steps:
+    1. Normalize the requested month count to between 1 and 12.
+    2. Determine the set of loan-based items to exclude from regular asset appreciation.
+    3. For each generated month:
+       a. Move to the next month.
+       b. Carry forward and appreciate asset values.
+       c. Carry forward and update income/expense values, including loan EMI logic.
+       d. Reconcile any income/expense items linked to assets.
+       e. Persist the calculated values and commit the transaction.
+    """
     num_months = request.num_months
     if num_months < 1:
         num_months = 1
@@ -611,6 +658,8 @@ def generate_months(
     current_month = month
     current_year = year
 
+    # Identify all loan-related income/expense entries so they can be handled separately
+    # from regular item appreciation and month value generation.
     loan_ids = {
         l.id
         for l in db.query(IncomeExpenseModel)
@@ -618,12 +667,17 @@ def generate_months(
         .all()
     }
 
+    current_asset_values = {}
+
     for _ in range(num_months):
         source_month = current_month
         source_year = current_year
 
+        # Advance to the next month before generating values for that target month.
         current_month, current_year = get_next_month(current_month, current_year)
 
+        # Load the previous month's item values so appreciation can be applied from the
+        # source month to the new target month.
         item_values = (
             db.query(MonthValueModel)
             .filter(
@@ -639,6 +693,9 @@ def generate_months(
         }
 
         items = db.query(ItemModel).all()
+        print(
+            f"\n=== Generating Month {current_month}/{current_year} from {source_month}/{source_year} ==="
+        )
         for item in items:
             if not is_active_in_month(item, current_month, current_year):
                 continue
@@ -651,6 +708,10 @@ def generate_months(
                 item.appreciation_rate,
                 item.appreciation_frequency,
                 current_month,
+            )
+
+            print(
+                f"[{item.name}] prev={prev_value}, appreciation_rate={item.appreciation_rate}, freq={item.appreciation_frequency} -> new={new_value}"
             )
 
             existing = (
@@ -675,6 +736,10 @@ def generate_months(
                 )
                 db.add(new_val)
 
+            current_asset_values[item.id] = new_value
+
+        # Load previous month income/expense values so recurring amounts and loan balances
+        # can be rolled forward into the target month.
         ie_values = (
             db.query(IncomeExpenseValueModel)
             .filter(
@@ -686,6 +751,14 @@ def generate_months(
             .all()
         )
         prev_ie_values = {v.item_id: v.value for v in ie_values}
+        prev_ie_balances = {
+            v.item_id: v.balance_outstanding
+            if v.balance_outstanding is not None
+            else v.value
+            for v in ie_values
+        }
+
+        loan_balance_outstanding = {}
 
         ie_items = db.query(IncomeExpenseModel).all()
         for item in ie_items:
@@ -693,35 +766,47 @@ def generate_months(
                 continue
 
             prev_value = prev_ie_values.get(item.id, 0)
+            new_balance = None
 
-            print(f"[DEBUG] Processing IE: {item.id}, name: {item.name}")
-            print(
-                f"[DEBUG]   is_fixed_emi: {item.is_fixed_emi}, interest_rate: {item.interest_rate}"
-            )
-            print(
-                f"[DEBUG]   balance_disbursed: {item.balance_disbursed}, fixed_emi_amount: {item.fixed_emi_amount}"
-            )
-            print(f"[DEBUG]   prev_value from DB: {prev_value}")
+            is_loan = item.interest_rate and item.emi_start_year
 
-            if item.is_fixed_emi and item.interest_rate and item.fixed_emi_amount:
-                print(f"[DEBUG] Entering loan calculation for {item.name}")
+            if is_loan:
+                if not prev_ie_balances.get(item.id):
+                    print(
+                        f"[Loan-{item.name}] skipping: no balance_outstanding in source month"
+                    )
+                    continue
 
-                # Use balance_disbursed as outstanding, fallback to prev_value for backward compat
-                outstanding = (
-                    item.balance_disbursed if item.balance_disbursed else prev_value
+                outstanding = prev_ie_balances[item.id]
+
+                is_pre_emi = item.emi_start_year and (
+                    current_year < item.emi_start_year
+                    or (
+                        current_year == item.emi_start_year
+                        and current_month < (item.emi_start_month or 1)
+                    )
                 )
-                print(f"[DEBUG] Outstanding balance: {outstanding}")
 
-                comps = calculate_loan_components(
-                    outstanding, item.interest_rate, item.fixed_emi_amount
-                )
-                print(f"[DEBUG] Loan components: {comps}")
+                if is_pre_emi or not item.fixed_emi_amount:
+                    new_value = round(outstanding * item.interest_rate / 1200)
+                    new_balance = outstanding
+                    print(
+                        f"[Loan-{item.name}] pre_emi: outstanding={outstanding}, interest={new_value}, rate={item.interest_rate}"
+                    )
+                else:
+                    comps = calculate_loan_components(
+                        outstanding, item.interest_rate, item.fixed_emi_amount
+                    )
+                    new_balance = comps["new_balance"]
+                    loan_balance_outstanding[item.id] = new_balance
 
-                # Update balance_disbursed with new outstanding
-                item.balance_disbursed = comps["new_balance"]
-                print(f"[DEBUG] Updated balance_disbursed: {item.balance_disbursed}")
-
-                new_value = comps["new_balance"]
+                    print(
+                        f"[Loan-{item.name}] outstanding={outstanding}, emi={item.fixed_emi_amount}, rate={item.interest_rate}"
+                    )
+                    print(
+                        f"  -> principal={comps['principal']}, interest={comps['interest']}, new_balance={new_balance}"
+                    )
+                    new_value = item.fixed_emi_amount
             else:
                 freq = item.appreciation_frequency
                 new_value = apply_appreciation(
@@ -730,7 +815,9 @@ def generate_months(
                     freq,
                     current_month,
                 )
-                print(f"[DEBUG] Using appreciation, new_value: {new_value}")
+                print(
+                    f"[IE-{item.name}] prev={prev_value}, appreciation_rate={item.appreciation_rate}, freq={freq} -> new={new_value}"
+                )
 
             existing = (
                 db.query(IncomeExpenseValueModel)
@@ -743,30 +830,19 @@ def generate_months(
                 )
                 .first()
             )
+            new_balance = new_balance if is_loan else None
             if existing:
                 existing.value = new_value
+                existing.balance_outstanding = new_balance
             else:
                 new_val = IncomeExpenseValueModel(
                     month=current_month,
                     year=current_year,
                     item_id=item.id,
                     value=new_value,
+                    balance_outstanding=new_balance,
                 )
                 db.add(new_val)
-
-        current_item_values = (
-            db.query(MonthValueModel)
-            .filter(
-                and_(
-                    MonthValueModel.month == current_month,
-                    MonthValueModel.year == current_year,
-                )
-            )
-            .all()
-        )
-        current_asset_values = {
-            v.item_id: v.value for v in current_item_values if v.item_id not in loan_ids
-        }
 
         ie_items = (
             db.query(IncomeExpenseModel)
@@ -781,7 +857,7 @@ def generate_months(
                 continue
 
             asset_id = ie_item.associated_asset_id
-            if not asset_id or asset_id in loan_ids:
+            if not asset_id:
                 continue
             if asset_id not in current_asset_values:
                 continue
@@ -799,16 +875,26 @@ def generate_months(
             )
             value = ie_val.value if ie_val else 0
 
+            print(
+                f"[AssetLink-{ie_item.name}] type={ie_item.ie_type}, value={value}, asset_id={asset_id}"
+            )
             if ie_item.ie_type == "income":
                 current_asset_values[asset_id] = (
                     current_asset_values.get(asset_id, 0) + value
+                )
+                print(
+                    f"  -> added {value} to asset {asset_id}, new asset value: {current_asset_values[asset_id]}"
                 )
             elif ie_item.ie_type == "expense":
                 current_asset_values[asset_id] = (
                     current_asset_values.get(asset_id, 0) - value
                 )
+                print(
+                    f"  -> deducted {value} from asset {asset_id}, new asset value: {current_asset_values[asset_id]}"
+                )
 
         for asset_id, asset_value in current_asset_values.items():
+            print(f"[Final-Asset-{asset_id}] value={asset_value}")
             existing = (
                 db.query(MonthValueModel)
                 .filter(
@@ -831,6 +917,7 @@ def generate_months(
                 )
                 db.add(new_val)
 
+        # Persist all generated values for the new month and record the generated month.
         db.commit()
         generated.append({"month": current_month, "year": current_year})
 

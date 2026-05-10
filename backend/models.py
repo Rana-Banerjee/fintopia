@@ -68,5 +68,6 @@ class IncomeExpenseValue(Base):
     year = Column(Integer, nullable=False)
     item_id = Column(String, ForeignKey("income_expenses.id"), nullable=False)
     value = Column(Float, nullable=False)
+    balance_outstanding = Column(Float, nullable=True)
 
     item = relationship("IncomeExpense", back_populates="values")

@@ -104,6 +104,7 @@ class IncomeExpenseValueBase(BaseModel):
     year: int
     item_id: str
     value: float
+    balance_outstanding: Optional[float] = None
 
 
 class IncomeExpenseValueCreate(IncomeExpenseValueBase):

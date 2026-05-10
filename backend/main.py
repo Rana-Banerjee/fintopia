@@ -694,10 +694,33 @@ def generate_months(
 
             prev_value = prev_ie_values.get(item.id, 0)
 
-            if item.interest_rate and item.balance_disbursed:
-                comps = calculate_loan_components(
-                    prev_value, item.interest_rate, item.fixed_emi_amount or 0
+            print(f"[DEBUG] Processing IE: {item.id}, name: {item.name}")
+            print(
+                f"[DEBUG]   is_fixed_emi: {item.is_fixed_emi}, interest_rate: {item.interest_rate}"
+            )
+            print(
+                f"[DEBUG]   balance_disbursed: {item.balance_disbursed}, fixed_emi_amount: {item.fixed_emi_amount}"
+            )
+            print(f"[DEBUG]   prev_value from DB: {prev_value}")
+
+            if item.is_fixed_emi and item.interest_rate and item.fixed_emi_amount:
+                print(f"[DEBUG] Entering loan calculation for {item.name}")
+
+                # Use balance_disbursed as outstanding, fallback to prev_value for backward compat
+                outstanding = (
+                    item.balance_disbursed if item.balance_disbursed else prev_value
                 )
+                print(f"[DEBUG] Outstanding balance: {outstanding}")
+
+                comps = calculate_loan_components(
+                    outstanding, item.interest_rate, item.fixed_emi_amount
+                )
+                print(f"[DEBUG] Loan components: {comps}")
+
+                # Update balance_disbursed with new outstanding
+                item.balance_disbursed = comps["new_balance"]
+                print(f"[DEBUG] Updated balance_disbursed: {item.balance_disbursed}")
+
                 new_value = comps["new_balance"]
             else:
                 freq = item.appreciation_frequency
@@ -707,6 +730,7 @@ def generate_months(
                     freq,
                     current_month,
                 )
+                print(f"[DEBUG] Using appreciation, new_value: {new_value}")
 
             existing = (
                 db.query(IncomeExpenseValueModel)

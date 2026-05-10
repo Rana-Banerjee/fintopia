@@ -49,4 +49,4 @@ None configured. Add tests if needed.
 
 ## Database
 
-- Migrations run via raw SQL ALTER TABLE/DROP statements in `main.py` on every backend startup (lines 28-99). New tables created via `Base.metadata.create_all()` at `main.py:26`.
+- Migrations run via raw SQL ALTER TABLE/DROP statements in `main.py` on every backend startup. New tables created via `Base.metadata.create_all()` at `main.py:37`.

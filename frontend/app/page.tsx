@@ -140,6 +140,7 @@ export default function Home() {
     liabilities: true,
     income: true,
     expenses: true,
+    loans: true,
   });
   const [graphCollapsed, setGraphCollapsed] = useState(false);
   const [visibleLines, setVisibleLines] = useState<Record<string, boolean>>({
@@ -886,6 +887,19 @@ export default function Home() {
     return phase !== "ended";
   });
   const loansTotal = visibleLoans.reduce((sum, loan) => sum + Math.round(loanBalances[loan.id] ?? loan.balance_disbursed ?? 0), 0);
+  const totalEmiExpense = visibleLoans.reduce((sum, loan) => {
+    const phase = getLoanPhase(loan, month, selectedMonthTab?.year ?? 2026);
+    const outstanding = loanBalances[loan.id] ?? loan.balance_disbursed ?? 0;
+    let emi = null;
+    if (phase === "active") {
+      emi = loan.is_fixed_emi && loan.fixed_emi_amount
+        ? loan.fixed_emi_amount
+        : computeLoanEmi(outstanding, loan.interest_rate ?? 0, loan.emi_end_month, loan.emi_end_year, loan.emi_start_month ?? 1, loan.emi_start_year ?? 2026, month, selectedMonthTab?.year ?? 2026);
+    } else if (phase === "pre_emi") {
+      emi = Math.round(outstanding * (loan.interest_rate ?? 0) / 1200);
+    }
+    return sum + (emi ?? 0);
+  }, 0);
 
   const sortedSnapshots = [...snapshots].sort((a, b) => {
     if (a.year !== b.year) return b.year - a.year;
@@ -1203,19 +1217,33 @@ export default function Home() {
                     {visibleLoans.length > 0 && (
                       <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
                         <div className="flex justify-between items-center mb-3 pb-2 border-b border-purple-200">
-                          <h3 className="text-md font-semibold text-purple-700">Loans</h3>
-                          <span className="text-md font-bold text-purple-700">₹{loansTotal.toLocaleString('en-IN')}</span>
+                          <button
+                            onClick={() => toggleSection("loans")}
+                            className="flex items-center gap-2"
+                          >
+                            <span className="text-gray-400">{expandedSections.loans ? "▼" : "▶"}</span>
+                            <h3 className="text-md font-semibold text-purple-700">Loans</h3>
+                          </button>
+                          <div className="flex items-center gap-4">
+                            <span className="text-sm text-purple-600">
+                              Liability: <span className="font-medium">₹{loansTotal.toLocaleString('en-IN')}</span>
+                            </span>
+                            <span className="text-sm text-purple-600">
+                              EMI: <span className="font-medium">₹{totalEmiExpense.toLocaleString('en-IN')}/mo</span>
+                            </span>
+                          </div>
                         </div>
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="text-left text-purple-600 text-xs border-b border-purple-200">
-                              <th className="pb-1 font-medium">Name</th>
-                              <th className="pb-1 font-medium text-right">Balance</th>
-                              <th className="pb-1 font-medium text-right">EMI</th>
-                              <th className="pb-1 font-medium text-right">Phase</th>
-                            </tr>
-                          </thead>
-                          <tbody>
+                        {expandedSections.loans && (
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="text-left text-purple-600 text-xs border-b border-purple-200">
+                                <th className="pb-1 font-medium">Name</th>
+                                <th className="pb-1 font-medium text-right">Balance</th>
+                                <th className="pb-1 font-medium text-right">EMI</th>
+                                <th className="pb-1 font-medium text-right">Phase</th>
+                              </tr>
+                            </thead>
+                            <tbody>
                             {visibleLoans.map(loan => {
                               const phase = getLoanPhase(loan, month, selectedMonthTab?.year ?? 2026);
                               const outstanding = loanBalances[loan.id] ?? loan.balance_disbursed ?? 0;
@@ -1255,6 +1283,7 @@ export default function Home() {
                             })}
                           </tbody>
                         </table>
+                        )}
                       </div>
                     )}
                   </div>

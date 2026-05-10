@@ -220,3 +220,49 @@ export async function generateMonths(
   const data = await res.json();
   return data.generated;
 }
+
+export interface EventImpact {
+  id?: number;
+  target_type: string;
+  target_id: string;
+  amount: number;
+  is_additive: boolean;
+}
+
+export interface Event {
+  id: string;
+  name: string;
+  is_recurring: boolean;
+  start_month: number | null;
+  start_year: number | null;
+  frequency_months: number | null;
+  duration: number;
+  impacts: EventImpact[];
+}
+
+export async function getEvents(): Promise<Event[]> {
+  const res = await fetch(`${API_BASE}/events`);
+  return res.json();
+}
+
+export async function createEvent(event: Omit<Event, "id">): Promise<Event> {
+  const res = await fetch(`${API_BASE}/events`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(event),
+  });
+  return res.json();
+}
+
+export async function updateEvent(id: string, event: Omit<Event, "id">): Promise<Event> {
+  const res = await fetch(`${API_BASE}/events/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(event),
+  });
+  return res.json();
+}
+
+export async function deleteEvent(id: string): Promise<void> {
+  await fetch(`${API_BASE}/events/${id}`, { method: "DELETE" });
+}

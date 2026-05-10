@@ -71,3 +71,32 @@ class IncomeExpenseValue(Base):
     balance_outstanding = Column(Float, nullable=True)
 
     item = relationship("IncomeExpense", back_populates="values")
+
+
+class Event(Base):
+    __tablename__ = "events"
+
+    id = Column(String, primary_key=True)
+    name = Column(String, nullable=False)
+    is_recurring = Column(Boolean, default=False)
+    start_month = Column(Integer, nullable=True)
+    start_year = Column(Integer, nullable=True)
+    frequency_months = Column(Integer, nullable=True)
+    duration = Column(Integer, default=1)
+
+    impacts = relationship(
+        "EventImpact", back_populates="event", cascade="all, delete-orphan"
+    )
+
+
+class EventImpact(Base):
+    __tablename__ = "event_impacts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    event_id = Column(String, ForeignKey("events.id"), nullable=False)
+    target_type = Column(String, nullable=False)
+    target_id = Column(String, nullable=False)
+    amount = Column(Float, nullable=False)
+    is_additive = Column(Boolean, default=True)
+
+    event = relationship("Event", back_populates="impacts")

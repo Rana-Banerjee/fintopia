@@ -11,6 +11,8 @@ from models import (
     MonthValue as MonthValueModel,
     IncomeExpense as IncomeExpenseModel,
     IncomeExpenseValue as IncomeExpenseValueModel,
+    Event as EventModel,
+    EventImpact as EventImpactModel,
 )
 from schemas import (
     ItemCreate,
@@ -24,6 +26,8 @@ from schemas import (
     IncomeExpenseValuesResponse,
     GenerateMonthsRequest,
     GenerateMonthsResponse,
+    EventCreate,
+    EventSchema,
 )
 
 LOG_FILE = "/tmp/generate_months_debug.log"
@@ -186,11 +190,31 @@ def get_month_values(month: int, year: int, db: Session = Depends(get_db)):
         .filter(and_(MonthValueModel.month == month, MonthValueModel.year == year))
         .all()
     )
-    non_loan = [v for v in values if v.item_id not in loan_ids]
+    value_map = {v.item_id: v.value for v in values if v.item_id not in loan_ids}
+    ie_values = (
+        db.query(IncomeExpenseValueModel)
+        .filter(
+            and_(
+                IncomeExpenseValueModel.month == month,
+                IncomeExpenseValueModel.year == year,
+            )
+        )
+        .all()
+    )
+    ie_map = {v.item_id: v.value for v in ie_values}
+
+    impacts = get_active_impacts_for_month(db, month, year)
+    if impacts:
+        value_map, _ = apply_event_impacts(impacts, value_map, {}, month, year)
+        for imp in impacts:
+            if imp.target_type in ("income", "expense"):
+                sign = 1 if imp.is_additive else -1
+                ie_map[imp.target_id] = ie_map.get(imp.target_id, 0) + imp.amount * sign
+
     return MonthValuesResponse(
         month=month,
         year=year,
-        values=[{"item_id": v.item_id, "value": v.value} for v in non_loan],
+        values=[{"item_id": k, "value": v} for k, v in value_map.items()],
     )
 
 
@@ -245,8 +269,358 @@ def delete_snapshot(month: int, year: int, db: Session = Depends(get_db)):
     db.query(MonthValueModel).filter(
         and_(MonthValueModel.month == month, MonthValueModel.year == year)
     ).delete()
+    db.query(IncomeExpenseValueModel).filter(
+        and_(
+            IncomeExpenseValueModel.month == month, IncomeExpenseValueModel.year == year
+        )
+    ).delete()
     db.commit()
     return {"message": "Snapshot deleted"}
+
+
+@app.get("/events", response_model=List[EventSchema])
+def get_events(db: Session = Depends(get_db)):
+    return db.query(EventModel).all()
+
+
+@app.post("/events", response_model=EventSchema)
+def create_event(event: EventCreate, db: Session = Depends(get_db)):
+    impacts_data = event.impacts
+    event_data = event.model_dump(exclude={"impacts"})
+    db_event = EventModel(id=uuid.uuid4().hex, **event_data)
+    db.add(db_event)
+    db.flush()
+    for imp in impacts_data:
+        db_imp = EventImpactModel(event_id=db_event.id, **imp.model_dump())
+        db.add(db_imp)
+    db.commit()
+    db.refresh(db_event)
+    regenerate_after(db, event.start_month, event.start_year)
+    return db_event
+
+
+@app.put("/events/{event_id}", response_model=EventSchema)
+def update_event(event_id: str, event: EventCreate, db: Session = Depends(get_db)):
+    db_event = db.query(EventModel).filter(EventModel.id == event_id).first()
+    if not db_event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    event_data = event.model_dump(exclude={"impacts"})
+    for k, v in event_data.items():
+        setattr(db_event, k, v)
+    db.query(EventImpactModel).filter(EventImpactModel.event_id == event_id).delete()
+    for imp in event.impacts:
+        db_imp = EventImpactModel(event_id=event_id, **imp.model_dump())
+        db.add(db_imp)
+    db.commit()
+    regenerate_after(db, event.start_month, event.start_year)
+    return db_event
+
+
+@app.delete("/events/{event_id}")
+def delete_event(event_id: str, db: Session = Depends(get_db)):
+    db_event = db.query(EventModel).filter(EventModel.id == event_id).first()
+    if not db_event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    start_month = db_event.start_month
+    start_year = db_event.start_year
+    db.query(EventImpactModel).filter(EventImpactModel.event_id == event_id).delete()
+    db.delete(db_event)
+    db.commit()
+    regenerate_after(db, start_month, start_year)
+    return {"message": "Event deleted"}
+
+
+def get_summary(month: int, year: int, db: Session):
+    items = db.query(ItemModel).all()
+    loan_ids = {
+        l.id
+        for l in db.query(IncomeExpenseModel)
+        .filter(IncomeExpenseModel.interest_rate.isnot(None))
+        .all()
+    }
+    values = (
+        db.query(MonthValueModel)
+        .filter(and_(MonthValueModel.month == month, MonthValueModel.year == year))
+        .all()
+    )
+    value_map = {v.item_id: v.value for v in values if v.item_id not in loan_ids}
+    current_assets = 0.0
+    liquid_liabilities = 0.0
+    semi_liquid_assets = 0.0
+    retirement_assets = 0.0
+    property_assets = 0.0
+    fixed_liabilities = 0.0
+    loan_liabilities = 0.0
+    for item in items:
+        value = value_map.get(item.id, 0.0)
+        if item.item_type == "asset":
+            if item.liquidity == "liquid":
+                current_assets += value
+            elif item.liquidity == "semi-liquid":
+                semi_liquid_assets += value
+            elif item.liquidity == "retirement":
+                retirement_assets += value
+            elif item.liquidity == "fixed":
+                property_assets += value
+        elif item.item_type == "liability":
+            if item.liquidity == "liquid":
+                liquid_liabilities += value
+            elif item.liquidity == "fixed":
+                fixed_liabilities += value
+    ie_items = db.query(IncomeExpenseModel).all()
+    ie_values = (
+        db.query(IncomeExpenseValueModel)
+        .filter(
+            and_(
+                IncomeExpenseValueModel.month == month,
+                IncomeExpenseValueModel.year == year,
+            )
+        )
+        .all()
+    )
+    ie_value_map = {v.item_id: v.value for v in ie_values}
+    ie_balance_map = {
+        v.item_id: v.balance_outstanding
+        for v in ie_values
+        if v.balance_outstanding is not None
+    }
+    total_income = 0.0
+    total_expense = 0.0
+    loan_interest = 0.0
+    loan_emi = 0.0
+    for item in ie_items:
+        if not is_active_in_month(item, month, year):
+            continue
+        if not applies_this_month(item, month):
+            continue
+        if item.ie_type == "income":
+            total_income += ie_value_map.get(item.id, 0.0)
+        elif item.ie_type == "expense":
+            if item.interest_rate and item.emi_start_month and item.emi_start_year:
+                is_pre_emi = (year < item.emi_start_year) or (
+                    year == item.emi_start_year and month < item.emi_start_month
+                )
+                is_active_emi = (year > item.emi_start_year) or (
+                    year == item.emi_start_year and month >= item.emi_start_month
+                )
+                has_ended = (
+                    item.emi_end_year
+                    and item.emi_end_month
+                    and (
+                        (year > item.emi_end_year)
+                        or (year == item.emi_end_year and month > item.emi_end_month)
+                    )
+                )
+                if has_ended:
+                    continue
+                loan_value = ie_balance_map.get(item.id) or ie_value_map.get(item.id, 0)
+                if is_pre_emi and loan_value > 0:
+                    loan_interest += round(loan_value * (item.interest_rate / 100) / 12)
+                elif is_active_emi:
+                    loan_emi += round(item.fixed_emi_amount or 0)
+                loan_liabilities += round(loan_value)
+            else:
+                total_expense += ie_value_map.get(item.id, 0.0)
+    impacts = get_active_impacts_for_month(db, month, year)
+    if impacts:
+        value_map, ie_balance_map = apply_event_impacts(
+            impacts, value_map, ie_balance_map, month, year
+        )
+        for imp in impacts:
+            if imp.target_type in ("income", "expense"):
+                sign = 1 if imp.is_additive else -1
+                ie_value_map[imp.target_id] = (
+                    ie_value_map.get(imp.target_id, 0) + imp.amount * sign
+                )
+                if imp.target_type == "income":
+                    total_income += imp.amount * sign
+                else:
+                    total_expense += imp.amount * sign
+    total_assets = (
+        current_assets + semi_liquid_assets + retirement_assets + property_assets
+    )
+    total_liabilities = liquid_liabilities + fixed_liabilities + loan_liabilities
+    net_worth = total_assets - total_liabilities
+    net_cashflow = total_income - total_expense - loan_interest - loan_emi
+    net_cash = (current_assets + semi_liquid_assets) - liquid_liabilities + net_cashflow
+    return Summary(
+        net_worth=net_worth,
+        net_cash=net_cash,
+        current_assets=current_assets,
+        liquid_liabilities=liquid_liabilities,
+        semi_liquid_assets=semi_liquid_assets,
+        retirement_assets=retirement_assets,
+        property_assets=property_assets,
+        fixed_liabilities=fixed_liabilities,
+        loan_liabilities=loan_liabilities,
+        total_income=total_income,
+        total_expense=total_expense,
+        loan_interest=loan_interest,
+        loan_emi=loan_emi,
+        net_cashflow=net_cashflow,
+    )
+
+
+@app.get("/summary", response_model=Summary)
+def get_summary_endpoint(month: int, year: int, db: Session = Depends(get_db)):
+    return get_summary(month, year, db)
+
+
+@app.post("/income-expenses", response_model=IncomeExpenseSchema)
+def create_income_expense(item: IncomeExpenseCreate, db: Session = Depends(get_db)):
+    db_item = IncomeExpenseModel(id=uuid.uuid4().hex, **item.model_dump())
+    db.add(db_item)
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+
+
+@app.get("/income-expenses", response_model=List[IncomeExpenseSchema])
+def get_income_expenses(db: Session = Depends(get_db)):
+    return (
+        db.query(IncomeExpenseModel)
+        .order_by(
+            IncomeExpenseModel.ie_type, IncomeExpenseModel.order, IncomeExpenseModel.id
+        )
+        .all()
+    )
+
+
+@app.delete("/income-expenses/{item_id}")
+def delete_income_expense(item_id: str, db: Session = Depends(get_db)):
+    item = db.query(IncomeExpenseModel).filter(IncomeExpenseModel.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    db.query(IncomeExpenseValueModel).filter(
+        IncomeExpenseValueModel.item_id == item_id
+    ).delete()
+    db.delete(item)
+    db.commit()
+    return {"message": "Income/Expense deleted"}
+
+
+@app.put("/income-expenses/{item_id}", response_model=IncomeExpenseSchema)
+def update_income_expense(
+    item_id: str, item: IncomeExpenseCreate, db: Session = Depends(get_db)
+):
+    db_item = (
+        db.query(IncomeExpenseModel).filter(IncomeExpenseModel.id == item_id).first()
+    )
+    if not db_item:
+        raise HTTPException(status_code=404, detail="Item not found")
+    for k, v in item.model_dump().items():
+        setattr(db_item, k, v)
+    db.commit()
+    db.refresh(db_item)
+    return db_item
+
+
+@app.get(
+    "/income-expenses/values/{month}/{year}", response_model=IncomeExpenseValuesResponse
+)
+def get_income_expense_values(month: int, year: int, db: Session = Depends(get_db)):
+    values = (
+        db.query(IncomeExpenseValueModel)
+        .filter(
+            and_(
+                IncomeExpenseValueModel.month == month,
+                IncomeExpenseValueModel.year == year,
+            )
+        )
+        .all()
+    )
+    return IncomeExpenseValuesResponse(
+        month=month,
+        year=year,
+        values=[{"item_id": v.item_id, "value": v.value} for v in values],
+    )
+
+
+@app.put("/income-expenses/values/{month}/{year}")
+def save_income_expense_values(
+    month: int, year: int, data: dict, db: Session = Depends(get_db)
+):
+    for item_id, value in data.items():
+        existing = (
+            db.query(IncomeExpenseValueModel)
+            .filter(
+                and_(
+                    IncomeExpenseValueModel.month == month,
+                    IncomeExpenseValueModel.year == year,
+                    IncomeExpenseValueModel.item_id == item_id,
+                )
+            )
+            .first()
+        )
+        if existing:
+            existing.value = value
+        else:
+            db.add(
+                IncomeExpenseValueModel(
+                    month=month, year=year, item_id=item_id, value=value
+                )
+            )
+    db.commit()
+    return {"message": "Income/Expense values saved"}
+
+
+@app.get("/loan-outstanding-balance/{month}/{year}")
+def get_loan_outstanding_balance(month: int, year: int, db: Session = Depends(get_db)):
+    loans = (
+        db.query(IncomeExpenseModel)
+        .filter(IncomeExpenseModel.interest_rate.isnot(None))
+        .all()
+    )
+    loan_ids = [l.id for l in loans]
+    values = (
+        db.query(IncomeExpenseValueModel)
+        .filter(
+            and_(
+                IncomeExpenseValueModel.month == month,
+                IncomeExpenseValueModel.year == year,
+                IncomeExpenseValueModel.item_id.in_(loan_ids),
+            )
+        )
+        .all()
+    )
+    return {
+        v.item_id: v.balance_outstanding
+        if v.balance_outstanding is not None
+        else v.value
+        for v in values
+    }
+
+
+@app.put("/loan-outstanding-balance/{month}/{year}")
+def save_loan_outstanding_balance(
+    month: int, year: int, data: dict, db: Session = Depends(get_db)
+):
+    for item_id, value in data.items():
+        existing = (
+            db.query(IncomeExpenseValueModel)
+            .filter(
+                and_(
+                    IncomeExpenseValueModel.month == month,
+                    IncomeExpenseValueModel.year == year,
+                    IncomeExpenseValueModel.item_id == item_id,
+                )
+            )
+            .first()
+        )
+        if existing:
+            existing.balance_outstanding = value
+        else:
+            db.add(
+                IncomeExpenseValueModel(
+                    month=month,
+                    year=year,
+                    item_id=item_id,
+                    value=0,
+                    balance_outstanding=value,
+                )
+            )
+    db.commit()
+    return {"message": "Loan outstanding balances saved"}
 
 
 def is_active_in_month(item, month, year):
@@ -331,10 +705,93 @@ def calculate_loan_components(balance, annual_rate, fixed_emi):
     return {"interest": interest, "principal": principal, "new_balance": new_balance}
 
 
-@app.get("/summary", response_model=Summary)
-def get_summary(month: int, year: int, db: Session = Depends(get_db)):
-    items = db.query(ItemModel).all()
+def get_event_occurrences(event):
+    if not event.is_recurring:
+        return [(event.start_month, event.start_year)]
+    occurrences = []
+    m, y = event.start_month, event.start_year
+    for _ in range(event.duration):
+        occurrences.append((m, y))
+        m = m + event.frequency_months
+        while m > 12:
+            m -= 12
+            y += 1
+    return occurrences
 
+
+def event_applies_in_month(event, month, year):
+    for m, y in get_event_occurrences(event):
+        if m == month and y == year:
+            return True
+    return False
+
+
+def apply_event_impacts(impacts, value_map, balance_map, month, year):
+    vm = dict(value_map)
+    bm = dict(balance_map) if balance_map else {}
+    for imp in impacts:
+        if not event_applies_in_month(imp.event, month, year):
+            continue
+        sign = 1 if imp.is_additive else -1
+        delta = imp.amount * sign
+        if imp.target_type in ("asset", "liability"):
+            vm[imp.target_id] = vm.get(imp.target_id, 0) + delta
+        elif imp.target_type in ("income", "expense"):
+            vm[imp.target_id] = vm.get(imp.target_id, 0) + delta
+        elif imp.target_type == "loan_balance":
+            bm[imp.target_id] = bm.get(imp.target_id, 0) + delta
+        elif imp.target_type == "loan_emi":
+            bm[imp.target_id] = bm.get(imp.target_id, 0) + delta
+    return vm, bm
+
+
+def get_active_impacts_for_month(db, month, year):
+    events = db.query(EventModel).all()
+    active = []
+    for e in events:
+        if event_applies_in_month(e, month, year):
+            for imp in e.impacts:
+                active.append(imp)
+    return active
+
+
+def regenerate_after(db: Session, month: int, year: int):
+    all_snapshots = (
+        db.query(MonthValueModel.month, MonthValueModel.year)
+        .distinct()
+        .order_by(MonthValueModel.year, MonthValueModel.month)
+        .all()
+    )
+    after = [
+        (s.month, s.year)
+        for s in all_snapshots
+        if (s.year > year) or (s.year == year and s.month > month)
+    ]
+    if not after:
+        return
+    for m, y in after:
+        db.query(MonthValueModel).filter(
+            and_(MonthValueModel.month == m, MonthValueModel.year == y)
+        ).delete(synchronize_session=False)
+        db.query(IncomeExpenseValueModel).filter(
+            and_(IncomeExpenseValueModel.month == m, IncomeExpenseValueModel.year == y)
+        ).delete(synchronize_session=False)
+    db.commit()
+
+    prev_m, prev_y = month, year
+    sorted_after = sorted(after, key=lambda s: (s[1], s[0]))
+    for gen_m, gen_y in sorted_after:
+        _regenerate_single_month(db, prev_m, prev_y, gen_m, gen_y)
+        prev_m, prev_y = gen_m, gen_y
+
+
+def _regenerate_single_month(
+    db: Session,
+    src_m: int,
+    src_y: int,
+    tgt_m: int,
+    tgt_y: int,
+):
     loan_ids = {
         l.id
         for l in db.query(IncomeExpenseModel)
@@ -342,303 +799,153 @@ def get_summary(month: int, year: int, db: Session = Depends(get_db)):
         .all()
     }
 
-    values = (
+    item_values = (
         db.query(MonthValueModel)
-        .filter(and_(MonthValueModel.month == month, MonthValueModel.year == year))
+        .filter(and_(MonthValueModel.month == src_m, MonthValueModel.year == src_y))
         .all()
     )
+    prev_item_values = {
+        v.item_id: v.value for v in item_values if v.item_id not in loan_ids
+    }
 
-    value_map = {v.item_id: v.value for v in values if v.item_id not in loan_ids}
-
-    current_assets = 0.0
-    liquid_liabilities = 0.0
-    semi_liquid_assets = 0.0
-    retirement_assets = 0.0
-    property_assets = 0.0
-    fixed_liabilities = 0.0
-    loan_liabilities = 0.0
-
+    current_asset_values = {}
+    items = db.query(ItemModel).all()
     for item in items:
-        value = value_map.get(item.id, 0.0)
-        liquidity = item.liquidity
+        if not is_active_in_month(item, tgt_m, tgt_y):
+            continue
+        if item.id in loan_ids:
+            continue
+        prev_value = prev_item_values.get(item.id, 0)
+        new_value = apply_appreciation(
+            prev_value, item.appreciation_rate, item.appreciation_frequency, tgt_m
+        )
+        current_asset_values[item.id] = new_value
 
-        if item.item_type == "asset":
-            if liquidity == "liquid":
-                current_assets += value
-            elif liquidity == "semi-liquid":
-                semi_liquid_assets += value
-            elif liquidity == "retirement":
-                retirement_assets += value
-            elif liquidity == "fixed":
-                property_assets += value
-        elif item.item_type == "liability":
-            if liquidity == "liquid":
-                liquid_liabilities += value
-            elif liquidity == "fixed":
-                fixed_liabilities += value
-
-    ie_items = db.query(IncomeExpenseModel).all()
     ie_values = (
         db.query(IncomeExpenseValueModel)
         .filter(
             and_(
-                IncomeExpenseValueModel.month == month,
-                IncomeExpenseValueModel.year == year,
+                IncomeExpenseValueModel.month == src_m,
+                IncomeExpenseValueModel.year == src_y,
             )
         )
         .all()
     )
-    ie_value_map = {v.item_id: v.value for v in ie_values}
-    ie_balance_map = {
-        v.item_id: v.balance_outstanding
+    prev_ie_values = {v.item_id: v.value for v in ie_values}
+    prev_ie_balances = {
+        v.item_id: (
+            v.balance_outstanding if v.balance_outstanding is not None else v.value
+        )
         for v in ie_values
-        if v.balance_outstanding is not None
     }
 
-    total_income = 0.0
-    total_expense = 0.0
-    loan_interest = 0.0
-    loan_emi = 0.0
-
+    new_ie_values = {}
+    ie_items = db.query(IncomeExpenseModel).all()
     for item in ie_items:
-        if not is_active_in_month(item, month, year):
+        if not is_active_in_month(item, tgt_m, tgt_y):
             continue
-        if not applies_this_month(item, month):
-            continue
+        prev_value = prev_ie_values.get(item.id, 0)
+        new_balance = None
+        is_loan = item.interest_rate and item.emi_start_year
 
-        if item.ie_type == "income":
-            value = ie_value_map.get(item.id, 0.0)
-            total_income += value
-        elif item.ie_type == "expense":
-            if item.interest_rate and item.emi_start_month and item.emi_start_year:
-                is_pre_emi = (year < item.emi_start_year) or (
-                    year == item.emi_start_year and month < item.emi_start_month
+        if is_loan:
+            if not prev_ie_balances.get(item.id):
+                continue
+            outstanding = prev_ie_balances[item.id]
+            is_pre_emi = item.emi_start_year and (
+                tgt_y < item.emi_start_year
+                or (
+                    tgt_y == item.emi_start_year and tgt_m < (item.emi_start_month or 1)
                 )
-                is_active_emi = (year > item.emi_start_year) or (
-                    year == item.emi_start_year and month >= item.emi_start_month
-                )
-                has_ended = (
-                    item.emi_end_year
-                    and item.emi_end_month
-                    and (
-                        (year > item.emi_end_year)
-                        or (year == item.emi_end_year and month > item.emi_end_month)
-                    )
-                )
-                if has_ended:
-                    continue
-
-                loan_value = ie_balance_map.get(item.id) or ie_value_map.get(item.id, 0)
-
-                if is_pre_emi:
-                    if loan_value > 0:
-                        interest = round(loan_value * (item.interest_rate / 100) / 12)
-                        loan_interest += interest
-                elif is_active_emi:
-                    loan_emi += round(item.fixed_emi_amount or 0)
-                loan_liabilities += round(loan_value)
-            else:
-                value = ie_value_map.get(item.id, 0.0)
-                total_expense += value
-
-    total_assets = (
-        current_assets + semi_liquid_assets + retirement_assets + property_assets
-    )
-    total_liabilities = liquid_liabilities + fixed_liabilities + loan_liabilities
-    net_worth = total_assets - total_liabilities
-    net_cashflow = total_income - total_expense - loan_interest - loan_emi
-    net_cash = (current_assets + semi_liquid_assets) - liquid_liabilities + net_cashflow
-
-    return Summary(
-        net_worth=net_worth,
-        net_cash=net_cash,
-        current_assets=current_assets,
-        liquid_liabilities=liquid_liabilities,
-        semi_liquid_assets=semi_liquid_assets,
-        retirement_assets=retirement_assets,
-        property_assets=property_assets,
-        fixed_liabilities=fixed_liabilities,
-        loan_liabilities=loan_liabilities,
-        total_income=total_income,
-        total_expense=total_expense,
-        loan_interest=loan_interest,
-        loan_emi=loan_emi,
-        net_cashflow=net_cashflow,
-    )
-
-
-@app.post("/income-expenses", response_model=IncomeExpenseSchema)
-def create_income_expense(item: IncomeExpenseCreate, db: Session = Depends(get_db)):
-    db_item = IncomeExpenseModel(id=uuid.uuid4().hex, **item.model_dump())
-    db.add(db_item)
-    db.commit()
-    db.refresh(db_item)
-    return db_item
-
-
-@app.get("/income-expenses", response_model=List[IncomeExpenseSchema])
-def get_income_expenses(db: Session = Depends(get_db)):
-    return (
-        db.query(IncomeExpenseModel)
-        .order_by(
-            IncomeExpenseModel.ie_type, IncomeExpenseModel.order, IncomeExpenseModel.id
-        )
-        .all()
-    )
-
-
-@app.delete("/income-expenses/{item_id}")
-def delete_income_expense(item_id: str, db: Session = Depends(get_db)):
-    item = db.query(IncomeExpenseModel).filter(IncomeExpenseModel.id == item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    db.query(IncomeExpenseValueModel).filter(
-        IncomeExpenseValueModel.item_id == item_id
-    ).delete()
-    db.delete(item)
-    db.commit()
-    return {"message": "Income/Expense deleted"}
-
-
-@app.put("/income-expenses/{item_id}", response_model=IncomeExpenseSchema)
-def update_income_expense(
-    item_id: str, item: IncomeExpenseCreate, db: Session = Depends(get_db)
-):
-    db_item = (
-        db.query(IncomeExpenseModel).filter(IncomeExpenseModel.id == item_id).first()
-    )
-    if not db_item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    db_item.name = item.name
-    db_item.ie_type = item.ie_type
-    db_item.frequency = item.frequency
-    db_item.appreciation_rate = item.appreciation_rate
-    db_item.appreciation_frequency = item.appreciation_frequency
-    db_item.start_month = item.start_month
-    db_item.start_year = item.start_year
-    db_item.end_month = item.end_month
-    db_item.end_year = item.end_year
-    db_item.order = item.order
-    db_item.interest_rate = item.interest_rate
-    db_item.emi_start_month = item.emi_start_month
-    db_item.emi_start_year = item.emi_start_year
-    db_item.emi_end_month = item.emi_end_month
-    db_item.emi_end_year = item.emi_end_year
-    db_item.balance_disbursed = item.balance_disbursed
-    db_item.associated_asset_id = item.associated_asset_id
-    db_item.is_fixed_emi = item.is_fixed_emi
-    db_item.fixed_emi_amount = item.fixed_emi_amount
-    db.commit()
-    db.refresh(db_item)
-    return db_item
-
-
-@app.get(
-    "/income-expenses/values/{month}/{year}", response_model=IncomeExpenseValuesResponse
-)
-def get_income_expense_values(month: int, year: int, db: Session = Depends(get_db)):
-    values = (
-        db.query(IncomeExpenseValueModel)
-        .filter(
-            and_(
-                IncomeExpenseValueModel.month == month,
-                IncomeExpenseValueModel.year == year,
             )
-        )
+            if is_pre_emi or not item.fixed_emi_amount:
+                new_value = round(outstanding * item.interest_rate / 1200)
+                new_balance = outstanding
+            else:
+                comps = calculate_loan_components(
+                    outstanding, item.interest_rate, item.fixed_emi_amount
+                )
+                new_balance = comps["new_balance"]
+                new_value = item.fixed_emi_amount
+        else:
+            new_value = apply_appreciation(
+                prev_value, item.appreciation_rate, item.appreciation_frequency, tgt_m
+            )
+
+        new_ie_values[item.id] = new_value
+
+    ie_with_asset = (
+        db.query(IncomeExpenseModel)
+        .filter(IncomeExpenseModel.associated_asset_id.isnot(None))
         .all()
     )
-    return IncomeExpenseValuesResponse(
-        month=month,
-        year=year,
-        values=[{"item_id": v.item_id, "value": v.value} for v in values],
-    )
+    for ie_item in ie_with_asset:
+        if not is_active_in_month(ie_item, tgt_m, tgt_y):
+            continue
+        if not applies_this_month(ie_item, tgt_m):
+            continue
+        asset_id = ie_item.associated_asset_id
+        if not asset_id or asset_id not in current_asset_values:
+            continue
+        value = new_ie_values.get(ie_item.id, 0)
+        if ie_item.ie_type == "income":
+            current_asset_values[asset_id] += value
+        elif ie_item.ie_type == "expense":
+            current_asset_values[asset_id] -= value
 
+    impacts = get_active_impacts_for_month(db, tgt_m, tgt_y)
+    if impacts:
+        current_asset_values, _ = apply_event_impacts(
+            impacts, current_asset_values, {}, tgt_m, tgt_y
+        )
+        for imp in impacts:
+            if imp.target_type in ("income", "expense"):
+                sign = 1 if imp.is_additive else -1
+                new_ie_values[imp.target_id] = (
+                    new_ie_values.get(imp.target_id, 0) + imp.amount * sign
+                )
 
-@app.put("/income-expenses/values/{month}/{year}")
-def save_income_expense_values(
-    month: int, year: int, data: dict, db: Session = Depends(get_db)
-):
-    for item_id, value in data.items():
+    for item_id, value in current_asset_values.items():
         existing = (
-            db.query(IncomeExpenseValueModel)
+            db.query(MonthValueModel)
             .filter(
                 and_(
-                    IncomeExpenseValueModel.month == month,
-                    IncomeExpenseValueModel.year == year,
-                    IncomeExpenseValueModel.item_id == item_id,
+                    MonthValueModel.month == tgt_m,
+                    MonthValueModel.year == tgt_y,
+                    MonthValueModel.item_id == item_id,
                 )
             )
             .first()
         )
-
         if existing:
             existing.value = value
         else:
-            new_value = IncomeExpenseValueModel(
-                month=month, year=year, item_id=item_id, value=value
+            db.add(
+                MonthValueModel(month=tgt_m, year=tgt_y, item_id=item_id, value=value)
             )
-            db.add(new_value)
 
-    db.commit()
-    return {"message": "Income/Expense values saved"}
-
-
-@app.get("/loan-outstanding-balance/{month}/{year}")
-def get_loan_outstanding_balance(month: int, year: int, db: Session = Depends(get_db)):
-    loans = (
-        db.query(IncomeExpenseModel)
-        .filter(IncomeExpenseModel.interest_rate.isnot(None))
-        .all()
-    )
-    loan_ids = [l.id for l in loans]
-    values = (
-        db.query(IncomeExpenseValueModel)
-        .filter(
-            and_(
-                IncomeExpenseValueModel.month == month,
-                IncomeExpenseValueModel.year == year,
-                IncomeExpenseValueModel.item_id.in_(loan_ids),
-            )
-        )
-        .all()
-    )
-    return {
-        v.item_id: v.balance_outstanding
-        if v.balance_outstanding is not None
-        else v.value
-        for v in values
-    }
-
-
-@app.put("/loan-outstanding-balance/{month}/{year}")
-def save_loan_outstanding_balance(
-    month: int, year: int, data: dict, db: Session = Depends(get_db)
-):
-    for item_id, value in data.items():
+    for item_id, value in new_ie_values.items():
         existing = (
             db.query(IncomeExpenseValueModel)
             .filter(
                 and_(
-                    IncomeExpenseValueModel.month == month,
-                    IncomeExpenseValueModel.year == year,
+                    IncomeExpenseValueModel.month == tgt_m,
+                    IncomeExpenseValueModel.year == tgt_y,
                     IncomeExpenseValueModel.item_id == item_id,
                 )
             )
             .first()
         )
         if existing:
-            existing.balance_outstanding = value
+            existing.value = value
         else:
-            new_value = IncomeExpenseValueModel(
-                month=month,
-                year=year,
-                item_id=item_id,
-                value=0,
-                balance_outstanding=value,
+            db.add(
+                IncomeExpenseValueModel(
+                    month=tgt_m, year=tgt_y, item_id=item_id, value=value
+                )
             )
-            db.add(new_value)
+
     db.commit()
-    return {"message": "Loan outstanding balances saved"}
 
 
 @app.post("/generate-months/{month}/{year}", response_model=GenerateMonthsResponse)

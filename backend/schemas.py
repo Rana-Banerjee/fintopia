@@ -152,3 +152,42 @@ class GenerateMonthsRequest(BaseModel):
 
 class GenerateMonthsResponse(BaseModel):
     generated: list[dict]
+
+
+class EventImpactBase(BaseModel):
+    target_type: str
+    target_id: str
+    amount: float
+    is_additive: bool = True
+
+
+class EventImpactCreate(EventImpactBase):
+    pass
+
+
+class EventImpactSchema(EventImpactBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+
+class EventBase(BaseModel):
+    name: str
+    is_recurring: bool = False
+    start_month: Optional[int] = None
+    start_year: Optional[int] = None
+    frequency_months: Optional[int] = None
+    duration: int = 1
+
+
+class EventCreate(EventBase):
+    impacts: list[EventImpactCreate] = []
+
+
+class EventSchema(EventBase):
+    id: str
+    impacts: list[EventImpactSchema] = []
+
+    class Config:
+        from_attributes = True

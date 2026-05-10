@@ -47,6 +47,14 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import {
+  getEvents,
+  createEvent,
+  updateEvent,
+  deleteEvent,
+  Event,
+  EventImpact,
+} from "@/lib/api";
 
 const LIQUIDITY_TYPES = [
   { value: "liquid", label: "Liquid" },
@@ -119,7 +127,7 @@ export default function Home() {
   const [generateNumMonths, setGenerateNumMonths] = useState(1);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"assets" | "liabilities" | "income" | "regular_expenses" | "loan_expenses">("assets");
+  const [settingsTab, setSettingsTab] = useState<"assets" | "liabilities" | "income" | "regular_expenses" | "loan_expenses" | "events">("assets");
   const [itemOrder, setItemOrder] = useState<Record<string, string[]>>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("itemOrder");
@@ -147,7 +155,19 @@ export default function Home() {
     income: true,
     expenses: true,
     loans: true,
+    events: true,
   });
+  const [events, setEvents] = useState<Event[]>([]);
+  const [eventForm, setEventForm] = useState({
+    name: "",
+    is_recurring: false,
+    start_month: "",
+    start_year: "",
+    frequency_months: "",
+    duration: "1",
+    impacts: [] as EventImpact[],
+  });
+  const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [graphCollapsed, setGraphCollapsed] = useState(false);
   const [visibleLines, setVisibleLines] = useState<Record<string, boolean>>({
     netWorth: true,
@@ -215,14 +235,16 @@ export default function Home() {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   async function fetchData() {
-    const [itemsData, snapshotsData, ieData] = await Promise.all([
+    const [itemsData, snapshotsData, ieData, eventsData] = await Promise.all([
       getItems(),
       getSnapshots(),
       getIncomeExpenses(),
+      getEvents(),
     ]);
     setItems(itemsData);
     setSnapshots(snapshotsData);
     setIncomeExpenses(ieData);
+    setEvents(eventsData);
 
     const summaries = await Promise.all(
       snapshotsData.map((s) => getSummary(s.month, s.year))
@@ -505,6 +527,69 @@ export default function Home() {
   function handleLoanBalanceChange(loanId: string, value: string) {
     setLoanBalances({ ...loanBalances, [loanId]: parseFloat(value) || 0 });
     setHasChanges(true);
+  }
+
+  function getTargetLabel(target_type: string, target_id: string): string {
+    if (target_type === "asset" || target_type === "liability") {
+      return items.find(i => i.id === target_id)?.name ?? target_id;
+    }
+    return incomeExpenses.find(i => i.id === target_id)?.name ?? target_id;
+  }
+
+  function getEventOccurrences(event: Event): [number, number][] {
+    if (!event.is_recurring) {
+      if (!event.start_month || !event.start_year) return [];
+      return [[event.start_month, event.start_year]];
+    }
+    const occurrences: [number, number][] = [];
+    let m: number = event.start_month ?? 1;
+    let y: number = event.start_year ?? Number(currentYear);
+    for (let i = 0; i < event.duration; i++) {
+      occurrences.push([m, y]);
+      m = m + (event.frequency_months ?? 1);
+      while (m > 12) { m -= 12; y += 1; }
+    }
+    return occurrences;
+  }
+
+  function eventAppliesInMonth(event: Event, month: number, year: number): boolean {
+    return getEventOccurrences(event).some(([m, y]) => m === month && y === year);
+  }
+
+  function startEditEvent(event: Event) {
+    setEventForm({
+      name: event.name,
+      is_recurring: event.is_recurring,
+      start_month: event.start_month != null ? String(event.start_month) : "",
+      start_year: event.start_year != null ? String(event.start_year) : "",
+      frequency_months: event.frequency_months != null ? String(event.frequency_months) : "",
+      duration: String(event.duration),
+      impacts: event.impacts.map(imp => ({ ...imp })),
+    });
+    setEditingEventId(event.id);
+  }
+
+  async function handleSaveEvent(e: React.FormEvent) {
+    e.preventDefault();
+    const payload = {
+      name: eventForm.name,
+      is_recurring: eventForm.is_recurring,
+      start_month: eventForm.start_month ? parseInt(eventForm.start_month) : null,
+      start_year: eventForm.start_year ? parseInt(eventForm.start_year) : null,
+      frequency_months: eventForm.frequency_months ? parseInt(eventForm.frequency_months) : null,
+      duration: parseInt(eventForm.duration) || 1,
+      impacts: eventForm.impacts.map(imp => ({
+        ...imp,
+        id: undefined,
+      })),
+    };
+    if (editingEventId === "new") {
+      await createEvent(payload as Omit<Event, "id">);
+    } else if (editingEventId) {
+      await updateEvent(editingEventId, payload as Omit<Event, "id">);
+    }
+    setEditingEventId(null);
+    fetchData();
   }
 
   function isIeApplicable(frequency: string, month: number): boolean {
@@ -1370,6 +1455,94 @@ export default function Home() {
                       </div>
                     )}
                   </div>
+
+                  <div className="bg-white p-4 rounded-lg shadow">
+                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
+                      <button
+                        onClick={() => toggleSection("events")}
+                        className="flex items-center gap-2 text-lg font-semibold"
+                      >
+                        <span>{expandedSections.events ? "▼" : "▶"}</span>
+                        <span className="text-amber-600">Events</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setEventForm({
+                            name: "",
+                            is_recurring: false,
+                            start_month: String(selectedMonthTab?.month ?? currentMonth),
+                            start_year: String(selectedMonthTab?.year ?? currentYear),
+                            frequency_months: "",
+                            duration: "1",
+                            impacts: [],
+                          });
+                          setEditingEventId("new");
+                          setSettingsTab("events");
+                          setSettingsOpen(true);
+                        }}
+                        className="px-3 py-1 text-sm bg-amber-100 text-amber-700 rounded hover:bg-amber-200"
+                      >
+                        + Add Event
+                      </button>
+                    </div>
+                    {expandedSections.events && (
+                      <div className="space-y-2">
+                        {events.length === 0 ? (
+                          <p className="text-sm text-gray-500">No events tracked. Add one to see them here.</p>
+                        ) : (
+                          events.filter(e => eventAppliesInMonth(e, month, selectedMonthTab?.year ?? currentYear)).map(event => (
+                            <div key={event.id} className="border border-amber-200 bg-amber-50 rounded-lg p-3">
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <h4 className="font-semibold text-amber-800">{event.name}</h4>
+                                  <p className="text-xs text-amber-600">
+                                    {event.is_recurring
+                                      ? `Every ${event.frequency_months}mo × ${event.duration}`
+                                      : `One-time`}
+                                  </p>
+                                  {event.impacts.length > 0 && (
+                                    <ul className="mt-1 text-xs text-amber-700">
+                                      {event.impacts.map((imp, idx) => (
+                                        <li key={idx}>
+                                          {imp.is_additive ? "+" : "-"}{imp.amount.toLocaleString('en-IN')} {imp.target_type}/{getTargetLabel(imp.target_type, imp.target_id)}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                                <div className="flex gap-1">
+                                  <button
+                                    onClick={() => {
+                                      startEditEvent(event);
+                                      setSettingsTab("events");
+                                      setSettingsOpen(true);
+                                    }}
+                                    className="px-2 py-1 text-xs bg-amber-200 text-amber-800 rounded hover:bg-amber-300"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      if (confirm("Delete this event? All future months will be recalculated.")) {
+                                        await deleteEvent(event.id);
+                                        fetchData();
+                                      }
+                                    }}
+                                    className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                        {events.filter(e => eventAppliesInMonth(e, month, selectedMonthTab?.year ?? currentYear)).length === 0 && events.length > 0 && (
+                          <p className="text-xs text-gray-400 text-center">No events active this month</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </>
             )}
@@ -1401,7 +1574,7 @@ export default function Home() {
               </div>
 
               <div className="flex border-b mb-4 overflow-x-auto">
-                {(["assets", "liabilities", "income", "regular_expenses", "loan_expenses"] as const).map((tab) => (
+                {(["assets", "liabilities", "income", "regular_expenses", "loan_expenses", "events"] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setSettingsTab(tab)}
@@ -1880,6 +2053,258 @@ export default function Home() {
                       </DndContext>
                     );
                   })()}
+                </div>
+              )}
+
+              {settingsTab === "events" && (
+                <div>
+                  {!editingEventId ? (
+                    <div>
+                      <button
+                        onClick={() => {
+                          setEventForm({
+                            name: "",
+                            is_recurring: false,
+                            start_month: String(currentMonth),
+                            start_year: String(currentYear),
+                            frequency_months: "",
+                            duration: "1",
+                            impacts: [],
+                          });
+                          setEditingEventId("new");
+                        }}
+                        className="mb-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                      >
+                        + Add Event
+                      </button>
+                      {events.length === 0 ? (
+                        <p className="text-gray-500 text-center py-8">No events yet. Add one to get started.</p>
+                      ) : (
+                        <div className="space-y-3">
+                          {events.map((event) => (
+                            <div key={event.id} className="border rounded-lg p-4">
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <h4 className="font-semibold">{event.name}</h4>
+                                  <p className="text-sm text-gray-600">
+                                    {event.is_recurring
+                                      ? `Recurring: ${event.start_month}/${event.start_year} every ${event.frequency_months}mo × ${event.duration} times`
+                                      : `One-time: ${event.start_month}/${event.start_year}`}
+                                  </p>
+                                  {event.impacts.length > 0 && (
+                                    <ul className="mt-2 text-sm text-gray-700">
+                                      {event.impacts.map((imp) => (
+                                        <li key={imp.id}>
+                                          {imp.is_additive ? "+" : "-"}{imp.amount} on {imp.target_type}/{getTargetLabel(imp.target_type, imp.target_id)}
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  )}
+                                </div>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => startEditEvent(event)}
+                                    className="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                                  >
+                                    Edit
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      if (confirm("Delete this event?")) {
+                                        await deleteEvent(event.id);
+                                        fetchData();
+                                      }
+                                    }}
+                                    className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
+                                  >
+                                    Delete
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <form onSubmit={handleSaveEvent} className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Event Name</label>
+                        <input
+                          type="text"
+                          value={eventForm.name}
+                          onChange={(e) => setEventForm(f => ({ ...f, name: e.target.value }))}
+                          className="w-full px-3 py-2 border rounded-lg"
+                          required
+                        />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={eventForm.is_recurring}
+                            onChange={(e) => setEventForm(f => ({ ...f, is_recurring: e.target.checked }))}
+                          />
+                          <span className="text-sm font-medium">Recurring Event</span>
+                        </label>
+                      </div>
+                      <div className="flex gap-3">
+                        <div className="flex-1">
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Start Month</label>
+                          <input
+                            type="number"
+                            min="1"
+                            max="12"
+                            value={eventForm.start_month}
+                            onChange={(e) => setEventForm(f => ({ ...f, start_month: e.target.value }))}
+                            className="w-full px-3 py-2 border rounded-lg"
+                            required
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <label className="block text-sm font-medium text-gray-700 mb-1">Start Year</label>
+                          <input
+                            type="number"
+                            value={eventForm.start_year}
+                            onChange={(e) => setEventForm(f => ({ ...f, start_year: e.target.value }))}
+                            className="w-full px-3 py-2 border rounded-lg"
+                            required
+                          />
+                        </div>
+                        {eventForm.is_recurring && (
+                          <>
+                            <div className="flex-1">
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Every (months)</label>
+                              <input
+                                type="number"
+                                min="1"
+                                value={eventForm.frequency_months}
+                                onChange={(e) => setEventForm(f => ({ ...f, frequency_months: e.target.value }))}
+                                className="w-full px-3 py-2 border rounded-lg"
+                              />
+                            </div>
+                            <div className="flex-1">
+                              <label className="block text-sm font-medium text-gray-700 mb-1">Duration (times)</label>
+                              <input
+                                type="number"
+                                min="1"
+                                value={eventForm.duration}
+                                onChange={(e) => setEventForm(f => ({ ...f, duration: e.target.value }))}
+                                className="w-full px-3 py-2 border rounded-lg"
+                              />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                      <div>
+                        <h4 className="font-medium text-gray-800 mb-2">Impacts</h4>
+                        {eventForm.impacts.map((imp, idx) => (
+                          <div key={idx} className="flex gap-2 mb-2 items-center">
+                            <select
+                              value={imp.target_type}
+                              onChange={(e) => {
+                                const updated = [...eventForm.impacts];
+                                updated[idx] = { ...updated[idx], target_type: e.target.value, target_id: "" };
+                                setEventForm(f => ({ ...f, impacts: updated }));
+                              }}
+                              className="px-2 py-1 border rounded-lg text-sm"
+                            >
+                              <option value="">Select type</option>
+                              <option value="asset">Asset</option>
+                              <option value="liability">Liability</option>
+                              <option value="income">Income</option>
+                              <option value="expense">Expense</option>
+                              <option value="loan_balance">Loan Balance</option>
+                              <option value="loan_emi">Loan EMI</option>
+                            </select>
+                            <select
+                              value={imp.target_id}
+                              onChange={(e) => {
+                                const updated = [...eventForm.impacts];
+                                updated[idx] = { ...updated[idx], target_id: e.target.value };
+                                setEventForm(f => ({ ...f, impacts: updated }));
+                              }}
+                              className="px-2 py-1 border rounded-lg text-sm flex-1"
+                            >
+                              <option value="">Select target</option>
+                              {imp.target_type === "asset" && items.filter(i => i.item_type === "asset").map(i => (
+                                <option key={i.id} value={i.id}>{i.name}</option>
+                              ))}
+                              {imp.target_type === "liability" && items.filter(i => i.item_type === "liability").map(i => (
+                                <option key={i.id} value={i.id}>{i.name}</option>
+                              ))}
+                              {imp.target_type === "income" && incomeExpenses.filter(i => i.ie_type === "income").map(i => (
+                                <option key={i.id} value={i.id}>{i.name}</option>
+                              ))}
+                              {imp.target_type === "expense" && incomeExpenses.filter(i => i.ie_type === "expense" && !i.interest_rate).map(i => (
+                                <option key={i.id} value={i.id}>{i.name}</option>
+                              ))}
+                              {(imp.target_type === "loan_balance" || imp.target_type === "loan_emi") && incomeExpenses.filter(i => !!i.interest_rate).map(i => (
+                                <option key={i.id} value={i.id}>{i.name}</option>
+                              ))}
+                            </select>
+                            <input
+                              type="number"
+                              placeholder="Amount"
+                              value={imp.amount}
+                              onChange={(e) => {
+                                const updated = [...eventForm.impacts];
+                                updated[idx] = { ...updated[idx], amount: parseFloat(e.target.value) || 0 };
+                                setEventForm(f => ({ ...f, impacts: updated }));
+                              }}
+                              className="px-2 py-1 border rounded-lg w-28"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = [...eventForm.impacts];
+                                updated[idx] = { ...updated[idx], is_additive: !updated[idx].is_additive };
+                                setEventForm(f => ({ ...f, impacts: updated }));
+                              }}
+                              className={`px-2 py-1 text-xs rounded ${imp.is_additive ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}`}
+                              title={imp.is_additive ? "Additive (adds value)" : "Deductive (reduces value)"}
+                            >
+                              {imp.is_additive ? "Add" : "Deduct"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = eventForm.impacts.filter((_, i) => i !== idx);
+                                setEventForm(f => ({ ...f, impacts: updated }));
+                              }}
+                              className="text-red-500 hover:text-red-700"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEventForm(f => ({
+                              ...f,
+                              impacts: [...f.impacts, { target_type: "", target_id: "", amount: 0, is_additive: true }],
+                            }));
+                          }}
+                          className="text-sm text-blue-600 hover:text-blue-800"
+                        >
+                          + Add Impact
+                        </button>
+                      </div>
+                      <div className="flex gap-2">
+                        <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                          {editingEventId === "new" ? "Create Event" : "Update Event"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingEventId(null)}
+                          className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  )}
                 </div>
               )}
 

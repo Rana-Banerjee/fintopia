@@ -62,7 +62,9 @@ const LIABILITY_LIQUIDITY_TYPES = [
 
 const APPRECIATION_FREQUENCIES = [
   { value: "monthly", label: "Monthly" },
+  { value: "bi_monthly", label: "Bi-Monthly" },
   { value: "quarterly", label: "Quarterly" },
+  { value: "semi_annual", label: "Semi-Annual" },
   { value: "yearly", label: "Yearly" },
 ];
 

@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, text
 from typing import List
 import uuid
+import logging
 from database import engine, get_db, Base
 from models import (
     Item as ItemModel,
@@ -24,6 +25,14 @@ from schemas import (
     GenerateMonthsRequest,
     GenerateMonthsResponse,
 )
+
+LOG_FILE = "/tmp/generate_months_debug.log"
+
+
+def log_msg(msg):
+    with open(LOG_FILE, "a") as f:
+        f.write(f"{msg}\n")
+
 
 Base.metadata.create_all(bind=engine)
 
@@ -714,28 +723,6 @@ def generate_months(
                 f"[{item.name}] prev={prev_value}, appreciation_rate={item.appreciation_rate}, freq={item.appreciation_frequency} -> new={new_value}"
             )
 
-            existing = (
-                db.query(MonthValueModel)
-                .filter(
-                    and_(
-                        MonthValueModel.month == current_month,
-                        MonthValueModel.year == current_year,
-                        MonthValueModel.item_id == item.id,
-                    )
-                )
-                .first()
-            )
-            if existing:
-                existing.value = new_value
-            else:
-                new_val = MonthValueModel(
-                    month=current_month,
-                    year=current_year,
-                    item_id=item.id,
-                    value=new_value,
-                )
-                db.add(new_val)
-
             current_asset_values[item.id] = new_value
 
         # Load previous month income/expense values so recurring amounts and loan balances
@@ -759,6 +746,9 @@ def generate_months(
         }
 
         loan_balance_outstanding = {}
+
+        # Track newly calculated IE values for this month (for asset link calculation)
+        new_ie_values = {}
 
         ie_items = db.query(IncomeExpenseModel).all()
         for item in ie_items:
@@ -844,39 +834,43 @@ def generate_months(
                 )
                 db.add(new_val)
 
+            # Track for asset link calculation
+            new_ie_values[item.id] = new_value
+
         ie_items = (
             db.query(IncomeExpenseModel)
             .filter(IncomeExpenseModel.associated_asset_id.isnot(None))
             .all()
         )
+        print(f"[AssetLink] Found {len(ie_items)} items with associated_asset_id")
+        log_msg(
+            f"[AssetLink] Found {len(ie_items)} items in month {current_month}/{current_year}"
+        )
 
         for ie_item in ie_items:
             if not is_active_in_month(ie_item, current_month, current_year):
+                print(
+                    f"[AssetLink] SKIP {ie_item.name}: not active in {current_month}/{current_year}"
+                )
                 continue
             if not applies_this_month(ie_item, current_month):
+                print(f"[AssetLink] SKIP {ie_item.name}: does not apply this month")
                 continue
 
             asset_id = ie_item.associated_asset_id
             if not asset_id:
                 continue
             if asset_id not in current_asset_values:
+                log_msg(
+                    f"[AssetLink] SKIP {ie_item.name}: asset_id {asset_id} not in current_asset_values (keys: {list(current_asset_values.keys())})"
+                )
                 continue
 
-            ie_val = (
-                db.query(IncomeExpenseValueModel)
-                .filter(
-                    and_(
-                        IncomeExpenseValueModel.month == current_month,
-                        IncomeExpenseValueModel.year == current_year,
-                        IncomeExpenseValueModel.item_id == ie_item.id,
-                    )
-                )
-                .first()
-            )
-            value = ie_val.value if ie_val else 0
+            # Use new_ie_values (calculated for this target month)
+            value = new_ie_values.get(ie_item.id, 0)
 
-            print(
-                f"[AssetLink-{ie_item.name}] type={ie_item.ie_type}, value={value}, asset_id={asset_id}"
+            log_msg(
+                f"[AssetLink-{ie_item.name}] type={ie_item.ie_type}, value={value}, current_asset_values before={current_asset_values.get(asset_id)}"
             )
             if ie_item.ie_type == "income":
                 current_asset_values[asset_id] = (
@@ -892,9 +886,10 @@ def generate_months(
                 print(
                     f"  -> deducted {value} from asset {asset_id}, new asset value: {current_asset_values[asset_id]}"
                 )
+            log_msg(f"[AssetLink] Final current_asset_values: {current_asset_values}")
 
         for asset_id, asset_value in current_asset_values.items():
-            print(f"[Final-Asset-{asset_id}] value={asset_value}")
+            log_msg(f"[Final-Asset-{asset_id}] value={asset_value}")
             existing = (
                 db.query(MonthValueModel)
                 .filter(
@@ -906,6 +901,7 @@ def generate_months(
                 )
                 .all()
             )
+            print(f"  -> found {len(existing)} existing record(s)")
             if len(existing) > 1:
                 for dup in existing[1:]:
                     db.delete(dup)
@@ -918,6 +914,7 @@ def generate_months(
                     item_id=asset_id,
                     value=asset_value,
                 )
+                print(f"  -> inserting new record for {asset_id}")
                 db.add(new_val)
 
         # Persist all generated values for the new month and record the generated month.

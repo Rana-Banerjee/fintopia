@@ -3,11 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, text
 from typing import List
+from datetime import datetime
 import uuid
 import logging
 from database import engine, get_db, Base
 from models import (
-    Item as ItemModel,
+    AssetLiability as AssetLiabilityModel,
     MonthValue as MonthValueModel,
     IncomeExpense as IncomeExpenseModel,
     IncomeExpenseValue as IncomeExpenseValueModel,
@@ -15,8 +16,8 @@ from models import (
     EventImpact as EventImpactModel,
 )
 from schemas import (
-    ItemCreate,
-    Item as ItemSchema,
+    AssetLiabilityCreate,
+    AssetLiability as AssetLiabilitySchema,
     MonthValueCreate,
     MonthValue as MonthValueSchema,
     MonthValuesResponse,
@@ -41,6 +42,12 @@ def log_msg(msg):
 Base.metadata.create_all(bind=engine)
 
 with engine.connect() as conn:
+    try:
+        conn.execute(text("ALTER TABLE items RENAME TO assets_liabilities"))
+        conn.commit()
+    except Exception:
+        pass
+
     for col, col_type in [
         ("start_month", "INTEGER"),
         ("start_year", "INTEGER"),
@@ -72,11 +79,69 @@ with engine.connect() as conn:
         except Exception:
             pass
 
+    for col, col_type in [
+        ("loan_balance", "REAL"),
+        ("interest_rate", "REAL"),
+        ("emi_start_month", "INTEGER"),
+        ("emi_start_year", "INTEGER"),
+        ("emi_end_month", "INTEGER"),
+        ("emi_end_year", "INTEGER"),
+        ("fixed_emi_amount", "REAL"),
+    ]:
+        try:
+            conn.execute(
+                text(f"ALTER TABLE assets_liabilities ADD COLUMN {col} {col_type}")
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+    for col, col_type in [("is_loan", "INTEGER")]:
+        try:
+            conn.execute(
+                text(f"ALTER TABLE assets_liabilities ADD COLUMN {col} {col_type}")
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+    try:
+        conn.execute(text("ALTER TABLE income_expenses ADD COLUMN is_loan INTEGER"))
+        conn.commit()
+    except Exception:
+        pass
+
     try:
         conn.execute(
             text(
-                "ALTER TABLE income_expense_values ADD COLUMN balance_outstanding REAL"
+                "UPDATE assets_liabilities SET is_loan = 1 WHERE loan_balance IS NOT NULL"
             )
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(
+            text("UPDATE assets_liabilities SET is_loan = 0 WHERE is_loan IS NULL")
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(
+            text(
+                "UPDATE income_expenses SET is_loan = 1 WHERE interest_rate IS NOT NULL"
+            )
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+    try:
+        conn.execute(
+            text("UPDATE income_expenses SET is_loan = 0 WHERE is_loan IS NULL")
         )
         conn.commit()
     except Exception:
@@ -122,6 +187,18 @@ with engine.connect() as conn:
     except Exception:
         pass
 
+    for col, col_type in [
+        ("interest_amount", "REAL"),
+        ("principal_amount", "REAL"),
+    ]:
+        try:
+            conn.execute(
+                text(f"ALTER TABLE income_expense_values ADD COLUMN {col} {col_type}")
+            )
+            conn.commit()
+        except Exception:
+            pass
+
 app = FastAPI(title="Fintopia API")
 
 app.add_middleware(
@@ -133,64 +210,128 @@ app.add_middleware(
 )
 
 
-@app.post("/items", response_model=ItemSchema)
-def create_item(item: ItemCreate, db: Session = Depends(get_db)):
-    db_item = ItemModel(id=uuid.uuid4().hex, **item.model_dump())
+@app.post("/assets-liabilities", response_model=AssetLiabilitySchema)
+def create_asset_liability(item: AssetLiabilityCreate, db: Session = Depends(get_db)):
+    if item.is_loan:
+        if not item.interest_rate:
+            raise HTTPException(
+                status_code=400, detail="Interest rate is required for loans"
+            )
+        if (
+            not item.emi_start_month
+            or not item.emi_start_year
+            or not item.emi_end_month
+            or not item.emi_end_year
+        ):
+            raise HTTPException(
+                status_code=400, detail="EMI start and end dates are required for loans"
+            )
+        if item.loan_balance is None:
+            item = item.model_copy(update={"loan_balance": 0})
+        emi_start = datetime(item.emi_start_year, item.emi_start_month, 1)
+        if emi_start <= datetime.now() and not item.fixed_emi_amount:
+            raise HTTPException(
+                status_code=400,
+                detail="Fixed EMI amount is required when EMI has already started",
+            )
+
+    db_item = AssetLiabilityModel(id=uuid.uuid4().hex, **item.model_dump())
     db.add(db_item)
     db.commit()
     db.refresh(db_item)
+
+    if db_item.is_loan:
+        ie_item = IncomeExpenseModel(
+            id=uuid.uuid4().hex,
+            name=f"{db_item.name} EMI",
+            ie_type="expense",
+            is_loan=True,
+            associated_asset_id=db_item.id,
+            frequency="monthly",
+            order=0,
+        )
+        db.add(ie_item)
+        db.commit()
+
     return db_item
 
 
-@app.get("/items", response_model=List[ItemSchema])
-def get_items(db: Session = Depends(get_db)):
-    return db.query(ItemModel).order_by(ItemModel.id).all()
+@app.get("/assets-liabilities", response_model=List[AssetLiabilitySchema])
+def get_assets_liabilities(db: Session = Depends(get_db)):
+    return db.query(AssetLiabilityModel).order_by(AssetLiabilityModel.id).all()
 
 
-@app.delete("/items/{item_id}")
-def delete_item(item_id: str, db: Session = Depends(get_db)):
-    item = db.query(ItemModel).filter(ItemModel.id == item_id).first()
+@app.delete("/assets-liabilities/{item_id}")
+def delete_asset_liability(item_id: str, db: Session = Depends(get_db)):
+    item = (
+        db.query(AssetLiabilityModel).filter(AssetLiabilityModel.id == item_id).first()
+    )
     if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
+        raise HTTPException(status_code=404, detail="Asset/Liability not found")
+    linked_ie_items = (
+        db.query(IncomeExpenseModel)
+        .filter(IncomeExpenseModel.associated_asset_id == item_id)
+        .all()
+    )
+    for ie_item in linked_ie_items:
+        db.query(IncomeExpenseValueModel).filter(
+            IncomeExpenseValueModel.item_id == ie_item.id
+        ).delete()
+    db.query(IncomeExpenseModel).filter(
+        IncomeExpenseModel.associated_asset_id == item_id
+    ).delete()
     db.query(MonthValueModel).filter(MonthValueModel.item_id == item_id).delete()
     db.delete(item)
     db.commit()
-    return {"message": "Item deleted"}
+    return {"message": "Asset/Liability deleted"}
 
 
-@app.put("/items/{item_id}", response_model=ItemSchema)
-def update_item(item_id: str, item: ItemCreate, db: Session = Depends(get_db)):
-    db_item = db.query(ItemModel).filter(ItemModel.id == item_id).first()
+@app.put("/assets-liabilities/{item_id}", response_model=AssetLiabilitySchema)
+def update_asset_liability(
+    item_id: str, item: AssetLiabilityCreate, db: Session = Depends(get_db)
+):
+    if item.is_loan:
+        if not item.interest_rate:
+            raise HTTPException(
+                status_code=400, detail="Interest rate is required for loans"
+            )
+        if (
+            not item.emi_start_month
+            or not item.emi_start_year
+            or not item.emi_end_month
+            or not item.emi_end_year
+        ):
+            raise HTTPException(
+                status_code=400, detail="EMI start and end dates are required for loans"
+            )
+        emi_start = datetime(item.emi_start_year, item.emi_start_month, 1)
+        if emi_start <= datetime.now() and not item.fixed_emi_amount:
+            raise HTTPException(
+                status_code=400,
+                detail="Fixed EMI amount is required when EMI has already started",
+            )
+
+    db_item = (
+        db.query(AssetLiabilityModel).filter(AssetLiabilityModel.id == item_id).first()
+    )
     if not db_item:
-        raise HTTPException(status_code=404, detail="Item not found")
-    db_item.name = item.name
-    db_item.item_type = item.item_type
-    db_item.liquidity = item.liquidity
-    db_item.appreciation_rate = item.appreciation_rate
-    db_item.appreciation_frequency = item.appreciation_frequency
-    db_item.start_month = item.start_month
-    db_item.start_year = item.start_year
-    db_item.end_month = item.end_month
-    db_item.end_year = item.end_year
+        raise HTTPException(status_code=404, detail="Asset/Liability not found")
+    for k, v in item.model_dump().items():
+        setattr(db_item, k, v)
     db.commit()
     db.refresh(db_item)
+
     return db_item
 
 
 @app.get("/month-values/{month}/{year}", response_model=MonthValuesResponse)
 def get_month_values(month: int, year: int, db: Session = Depends(get_db)):
-    loan_ids = {
-        l.id
-        for l in db.query(IncomeExpenseModel)
-        .filter(IncomeExpenseModel.interest_rate.isnot(None))
-        .all()
-    }
     values = (
         db.query(MonthValueModel)
         .filter(and_(MonthValueModel.month == month, MonthValueModel.year == year))
         .all()
     )
-    value_map = {v.item_id: v.value for v in values if v.item_id not in loan_ids}
+    value_map = {v.item_id: v.value for v in values}
     ie_values = (
         db.query(IncomeExpenseValueModel)
         .filter(
@@ -223,7 +364,7 @@ def save_month_values(month: int, year: int, data: dict, db: Session = Depends(g
     loan_ids = {
         l.id
         for l in db.query(IncomeExpenseModel)
-        .filter(IncomeExpenseModel.interest_rate.isnot(None))
+        .filter(IncomeExpenseModel.is_loan == True)
         .all()
     }
     for item_id, value in data.items():
@@ -330,20 +471,28 @@ def delete_event(event_id: str, db: Session = Depends(get_db)):
     return {"message": "Event deleted"}
 
 
+@app.post("/events/{event_id}/apply")
+def apply_event(event_id: str, db: Session = Depends(get_db)):
+    db_event = db.query(EventModel).filter(EventModel.id == event_id).first()
+    if not db_event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if db_event.start_month is None or db_event.start_year is None:
+        raise HTTPException(status_code=400, detail="Event has no start date")
+    regenerate_after(db, db_event.start_month, db_event.start_year)
+    return {"message": "Event applied"}
+
+
 def get_summary(month: int, year: int, db: Session):
-    items = db.query(ItemModel).all()
-    loan_ids = {
-        l.id
-        for l in db.query(IncomeExpenseModel)
-        .filter(IncomeExpenseModel.interest_rate.isnot(None))
-        .all()
-    }
+    items = db.query(AssetLiabilityModel).all()
     values = (
         db.query(MonthValueModel)
         .filter(and_(MonthValueModel.month == month, MonthValueModel.year == year))
         .all()
     )
-    value_map = {v.item_id: v.value for v in values if v.item_id not in loan_ids}
+    value_map = {v.item_id: v.value for v in values}
+
+    loan_assets = {item.id: item for item in items if item.is_loan}
+
     current_assets = 0.0
     liquid_liabilities = 0.0
     semi_liquid_assets = 0.0
@@ -352,6 +501,9 @@ def get_summary(month: int, year: int, db: Session):
     fixed_liabilities = 0.0
     loan_liabilities = 0.0
     for item in items:
+        if item.id in loan_assets:
+            loan_liabilities += value_map.get(item.id, 0.0)
+            continue
         value = value_map.get(item.id, 0.0)
         if item.item_type == "asset":
             if item.liquidity == "liquid":
@@ -379,53 +531,61 @@ def get_summary(month: int, year: int, db: Session):
         .all()
     )
     ie_value_map = {v.item_id: v.value for v in ie_values}
-    ie_balance_map = {
-        v.item_id: v.balance_outstanding
-        for v in ie_values
-        if v.balance_outstanding is not None
-    }
+    ie_interest_map = {v.item_id: v.interest_amount for v in ie_values}
+    ie_principal_map = {v.item_id: v.principal_amount for v in ie_values}
     total_income = 0.0
     total_expense = 0.0
     loan_interest = 0.0
     loan_emi = 0.0
+
+    ie_items_by_loan = {}
+    regular_ie_items = []
     for item in ie_items:
         if not is_active_in_month(item, month, year):
             continue
         if not applies_this_month(item, month):
             continue
+        if item.associated_asset_id and item.associated_asset_id in loan_assets:
+            if item.associated_asset_id not in ie_items_by_loan:
+                ie_items_by_loan[item.associated_asset_id] = []
+            ie_items_by_loan[item.associated_asset_id].append(item)
+        else:
+            regular_ie_items.append(item)
+
+    for item in regular_ie_items:
         if item.ie_type == "income":
             total_income += ie_value_map.get(item.id, 0.0)
         elif item.ie_type == "expense":
-            if item.interest_rate and item.emi_start_month and item.emi_start_year:
-                is_pre_emi = (year < item.emi_start_year) or (
-                    year == item.emi_start_year and month < item.emi_start_month
-                )
-                is_active_emi = (year > item.emi_start_year) or (
-                    year == item.emi_start_year and month >= item.emi_start_month
-                )
-                has_ended = (
-                    item.emi_end_year
-                    and item.emi_end_month
-                    and (
-                        (year > item.emi_end_year)
-                        or (year == item.emi_end_year and month > item.emi_end_month)
-                    )
-                )
-                if has_ended:
-                    continue
-                loan_value = ie_balance_map.get(item.id) or ie_value_map.get(item.id, 0)
-                if is_pre_emi and loan_value > 0:
-                    loan_interest += round(loan_value * (item.interest_rate / 100) / 12)
-                elif is_active_emi:
-                    loan_emi += round(item.fixed_emi_amount or 0)
-                loan_liabilities += round(loan_value)
-            else:
-                total_expense += ie_value_map.get(item.id, 0.0)
+            total_expense += ie_value_map.get(item.id, 0.0)
+
+    for loan_id, loan_items in ie_items_by_loan.items():
+        loan = loan_assets[loan_id]
+        is_pre_emi = loan.emi_start_year and (
+            year < loan.emi_start_year
+            or (year == loan.emi_start_year and month < (loan.emi_start_month or 1))
+        )
+        is_active_emi = loan.emi_start_year and (
+            year > loan.emi_start_year
+            or (year == loan.emi_start_year and month >= (loan.emi_start_month or 1))
+        )
+        has_ended = (
+            loan.emi_end_year
+            and loan.emi_end_month
+            and (
+                (year > loan.emi_end_year)
+                or (year == loan.emi_end_year and month > loan.emi_end_month)
+            )
+        )
+        if has_ended:
+            continue
+        for item in loan_items:
+            ie_value = ie_value_map.get(item.id, 0)
+            total_expense += ie_value
+            loan_interest += ie_interest_map.get(item.id) or 0
+            loan_emi += ie_principal_map.get(item.id) or 0
     impacts = get_active_impacts_for_month(db, month, year)
     if impacts:
-        value_map, ie_balance_map = apply_event_impacts(
-            impacts, value_map, ie_balance_map, month, year
-        )
+        value_map, _ = apply_event_impacts(impacts, value_map, {}, month, year)
         for imp in impacts:
             if imp.target_type in ("income", "expense"):
                 sign = 1 if imp.is_additive else -1
@@ -441,7 +601,7 @@ def get_summary(month: int, year: int, db: Session):
     )
     total_liabilities = liquid_liabilities + fixed_liabilities + loan_liabilities
     net_worth = total_assets - total_liabilities
-    net_cashflow = total_income - total_expense - loan_interest - loan_emi
+    net_cashflow = total_income - total_expense
     net_cash = (current_assets + semi_liquid_assets) - liquid_liabilities + net_cashflow
     return Summary(
         net_worth=net_worth,
@@ -541,6 +701,64 @@ def save_income_expense_values(
     month: int, year: int, data: dict, db: Session = Depends(get_db)
 ):
     for item_id, value in data.items():
+        ie_item = (
+            db.query(IncomeExpenseModel)
+            .filter(IncomeExpenseModel.id == item_id)
+            .first()
+        )
+        interest_amount = None
+        principal_amount = None
+        if ie_item and ie_item.associated_asset_id:
+            loan = (
+                db.query(AssetLiabilityModel)
+                .filter(AssetLiabilityModel.id == ie_item.associated_asset_id)
+                .first()
+            )
+            if loan and loan.is_loan:
+                month_values = (
+                    db.query(MonthValueModel)
+                    .filter(
+                        and_(
+                            MonthValueModel.month == month,
+                            MonthValueModel.year == year,
+                            MonthValueModel.item_id == loan.id,
+                        )
+                    )
+                    .first()
+                )
+                loan_balance = (
+                    month_values.value if month_values else (loan.loan_balance or 0)
+                )
+                interest_amount = round(loan_balance * (loan.interest_rate or 0) / 1200)
+                is_pre_emi = loan.emi_start_year and (
+                    year < loan.emi_start_year
+                    or (
+                        year == loan.emi_start_year
+                        and month < (loan.emi_start_month or 1)
+                    )
+                )
+                is_active_emi = loan.emi_start_year and (
+                    year > loan.emi_start_year
+                    or (
+                        year == loan.emi_start_year
+                        and month >= (loan.emi_start_month or 1)
+                    )
+                )
+                has_ended = (
+                    loan.emi_end_year
+                    and loan.emi_end_month
+                    and (
+                        (year > loan.emi_end_year)
+                        or (year == loan.emi_end_year and month > loan.emi_end_month)
+                    )
+                )
+                if has_ended:
+                    interest_amount = 0
+                    principal_amount = 0
+                elif is_pre_emi:
+                    principal_amount = 0
+                elif is_active_emi:
+                    principal_amount = max(0, value - interest_amount)
         existing = (
             db.query(IncomeExpenseValueModel)
             .filter(
@@ -554,73 +772,21 @@ def save_income_expense_values(
         )
         if existing:
             existing.value = value
-        else:
-            db.add(
-                IncomeExpenseValueModel(
-                    month=month, year=year, item_id=item_id, value=value
-                )
-            )
-    db.commit()
-    return {"message": "Income/Expense values saved"}
-
-
-@app.get("/loan-outstanding-balance/{month}/{year}")
-def get_loan_outstanding_balance(month: int, year: int, db: Session = Depends(get_db)):
-    loans = (
-        db.query(IncomeExpenseModel)
-        .filter(IncomeExpenseModel.interest_rate.isnot(None))
-        .all()
-    )
-    loan_ids = [l.id for l in loans]
-    values = (
-        db.query(IncomeExpenseValueModel)
-        .filter(
-            and_(
-                IncomeExpenseValueModel.month == month,
-                IncomeExpenseValueModel.year == year,
-                IncomeExpenseValueModel.item_id.in_(loan_ids),
-            )
-        )
-        .all()
-    )
-    return {
-        v.item_id: v.balance_outstanding
-        if v.balance_outstanding is not None
-        else v.value
-        for v in values
-    }
-
-
-@app.put("/loan-outstanding-balance/{month}/{year}")
-def save_loan_outstanding_balance(
-    month: int, year: int, data: dict, db: Session = Depends(get_db)
-):
-    for item_id, value in data.items():
-        existing = (
-            db.query(IncomeExpenseValueModel)
-            .filter(
-                and_(
-                    IncomeExpenseValueModel.month == month,
-                    IncomeExpenseValueModel.year == year,
-                    IncomeExpenseValueModel.item_id == item_id,
-                )
-            )
-            .first()
-        )
-        if existing:
-            existing.balance_outstanding = value
+            existing.interest_amount = interest_amount
+            existing.principal_amount = principal_amount
         else:
             db.add(
                 IncomeExpenseValueModel(
                     month=month,
                     year=year,
                     item_id=item_id,
-                    value=0,
-                    balance_outstanding=value,
+                    value=value,
+                    interest_amount=interest_amount,
+                    principal_amount=principal_amount,
                 )
             )
     db.commit()
-    return {"message": "Loan outstanding balances saved"}
+    return {"message": "Income/Expense values saved"}
 
 
 def is_active_in_month(item, month, year):
@@ -785,6 +951,21 @@ def regenerate_after(db: Session, month: int, year: int):
         prev_m, prev_y = gen_m, gen_y
 
 
+@app.post("/regenerate-all")
+def regenerate_all(db: Session = Depends(get_db)):
+    all_snapshots = (
+        db.query(MonthValueModel.month, MonthValueModel.year)
+        .distinct()
+        .order_by(MonthValueModel.year, MonthValueModel.month)
+        .all()
+    )
+    if not all_snapshots:
+        return {"message": "No snapshots to regenerate"}
+    first_snapshot = all_snapshots[0]
+    regenerate_after(db, first_snapshot.month, first_snapshot.year)
+    return {"message": "All months regenerated"}
+
+
 def _regenerate_single_month(
     db: Session,
     src_m: int,
@@ -792,28 +973,65 @@ def _regenerate_single_month(
     tgt_m: int,
     tgt_y: int,
 ):
-    loan_ids = {
-        l.id
-        for l in db.query(IncomeExpenseModel)
-        .filter(IncomeExpenseModel.interest_rate.isnot(None))
-        .all()
+    loan_assets = {
+        item.id: item for item in db.query(AssetLiabilityModel).all() if item.is_loan
     }
+    loan_ids = set(loan_assets.keys())
 
     item_values = (
         db.query(MonthValueModel)
         .filter(and_(MonthValueModel.month == src_m, MonthValueModel.year == src_y))
         .all()
     )
-    prev_item_values = {
-        v.item_id: v.value for v in item_values if v.item_id not in loan_ids
-    }
+    prev_item_values = {v.item_id: v.value for v in item_values}
 
     current_asset_values = {}
-    items = db.query(ItemModel).all()
+    items = db.query(AssetLiabilityModel).all()
     for item in items:
         if not is_active_in_month(item, tgt_m, tgt_y):
             continue
+
         if item.id in loan_ids:
+            loan = loan_assets[item.id]
+            prev_loan_balance = prev_item_values.get(item.id, 0)
+
+            is_pre_emi = loan.emi_start_year and (
+                tgt_y < loan.emi_start_year
+                or (
+                    tgt_y == loan.emi_start_year and tgt_m < (loan.emi_start_month or 1)
+                )
+            )
+            is_active_emi = loan.emi_start_year and (
+                tgt_y > loan.emi_start_year
+                or (
+                    tgt_y == loan.emi_start_year
+                    and tgt_m >= (loan.emi_start_month or 1)
+                )
+            )
+            has_ended = (
+                loan.emi_end_year
+                and loan.emi_end_month
+                and (
+                    tgt_y > loan.emi_end_year
+                    or (tgt_y == loan.emi_end_year and tgt_m > loan.emi_end_month)
+                )
+            )
+
+            if has_ended or not prev_loan_balance:
+                current_asset_values[item.id] = prev_loan_balance
+                continue
+
+            interest = round(prev_loan_balance * (loan.interest_rate or 0) / 1200)
+
+            if is_pre_emi:
+                current_asset_values[item.id] = prev_loan_balance
+            elif is_active_emi:
+                emi = loan.fixed_emi_amount or 0
+                principal = max(0, emi - interest)
+                new_balance = max(0, prev_loan_balance - principal)
+                current_asset_values[item.id] = new_balance
+            else:
+                current_asset_values[item.id] = prev_loan_balance
             continue
         prev_value = prev_item_values.get(item.id, 0)
         new_value = apply_appreciation(
@@ -832,46 +1050,68 @@ def _regenerate_single_month(
         .all()
     )
     prev_ie_values = {v.item_id: v.value for v in ie_values}
-    prev_ie_balances = {
-        v.item_id: (
-            v.balance_outstanding if v.balance_outstanding is not None else v.value
-        )
-        for v in ie_values
-    }
 
     new_ie_values = {}
+
+    # First calculate interest/principal for loan-linked IE items
+    ie_items_linked_to_loans = (
+        db.query(IncomeExpenseModel)
+        .filter(IncomeExpenseModel.associated_asset_id.in_(loan_ids))
+        .all()
+    )
+    for ie_item in ie_items_linked_to_loans:
+        if not is_active_in_month(ie_item, tgt_m, tgt_y):
+            continue
+        if not applies_this_month(ie_item, tgt_m):
+            continue
+
+        loan = loan_assets.get(ie_item.associated_asset_id)
+        if not loan:
+            continue
+
+        loan_balance = current_asset_values.get(ie_item.associated_asset_id, 0)
+
+        is_pre_emi = loan.emi_start_year and (
+            tgt_y < loan.emi_start_year
+            or (tgt_y == loan.emi_start_year and tgt_m < (loan.emi_start_month or 1))
+        )
+        is_active_emi = loan.emi_start_year and (
+            tgt_y > loan.emi_start_year
+            or (tgt_y == loan.emi_start_year and tgt_m >= (loan.emi_start_month or 1))
+        )
+        has_ended = (
+            loan.emi_end_year
+            and loan.emi_end_month
+            and (
+                tgt_y > loan.emi_end_year
+                or (tgt_y == loan.emi_end_year and tgt_m > loan.emi_end_month)
+            )
+        )
+
+        if has_ended or not loan_balance:
+            new_ie_values[ie_item.id] = 0
+            continue
+
+        interest = round(loan_balance * (loan.interest_rate or 0) / 1200)
+
+        if is_pre_emi:
+            new_ie_values[ie_item.id] = interest
+        elif is_active_emi:
+            emi = loan.fixed_emi_amount or 0
+            principal = max(0, emi - interest)
+            new_ie_values[ie_item.id] = principal
+
+    # Then process regular IE items
     ie_items = db.query(IncomeExpenseModel).all()
     for item in ie_items:
         if not is_active_in_month(item, tgt_m, tgt_y):
             continue
+        if item.associated_asset_id and item.associated_asset_id in loan_ids:
+            continue
         prev_value = prev_ie_values.get(item.id, 0)
-        new_balance = None
-        is_loan = item.interest_rate and item.emi_start_year
-
-        if is_loan:
-            if not prev_ie_balances.get(item.id):
-                continue
-            outstanding = prev_ie_balances[item.id]
-            is_pre_emi = item.emi_start_year and (
-                tgt_y < item.emi_start_year
-                or (
-                    tgt_y == item.emi_start_year and tgt_m < (item.emi_start_month or 1)
-                )
-            )
-            if is_pre_emi or not item.fixed_emi_amount:
-                new_value = round(outstanding * item.interest_rate / 1200)
-                new_balance = outstanding
-            else:
-                comps = calculate_loan_components(
-                    outstanding, item.interest_rate, item.fixed_emi_amount
-                )
-                new_balance = comps["new_balance"]
-                new_value = item.fixed_emi_amount
-        else:
-            new_value = apply_appreciation(
-                prev_value, item.appreciation_rate, item.appreciation_frequency, tgt_m
-            )
-
+        new_value = apply_appreciation(
+            prev_value, item.appreciation_rate, item.appreciation_frequency, tgt_m
+        )
         new_ie_values[item.id] = new_value
 
     ie_with_asset = (
@@ -880,6 +1120,8 @@ def _regenerate_single_month(
         .all()
     )
     for ie_item in ie_with_asset:
+        if ie_item.associated_asset_id in loan_ids:
+            continue
         if not is_active_in_month(ie_item, tgt_m, tgt_y):
             continue
         if not applies_this_month(ie_item, tgt_m):
@@ -975,13 +1217,10 @@ def generate_months(
     current_year = year
 
     # Identify all loan-related income/expense entries so they can be handled separately
-    # from regular item appreciation and month value generation.
-    loan_ids = {
-        l.id
-        for l in db.query(IncomeExpenseModel)
-        .filter(IncomeExpenseModel.interest_rate.isnot(None))
-        .all()
+    loan_assets = {
+        item.id: item for item in db.query(AssetLiabilityModel).all() if item.is_loan
     }
+    loan_ids = set(loan_assets.keys())
 
     current_asset_values = {}
 
@@ -1008,14 +1247,68 @@ def generate_months(
             v.item_id: v.value for v in item_values if v.item_id not in loan_ids
         }
 
-        items = db.query(ItemModel).all()
+        items = db.query(AssetLiabilityModel).all()
         print(
             f"\n=== Generating Month {current_month}/{current_year} from {source_month}/{source_year} ==="
         )
         for item in items:
             if not is_active_in_month(item, current_month, current_year):
                 continue
+
             if item.id in loan_ids:
+                loan = loan_assets[item.id]
+                prev_loan_balance = prev_item_values.get(item.id, 0)
+
+                is_pre_emi = loan.emi_start_year and (
+                    current_year < loan.emi_start_year
+                    or (
+                        current_year == loan.emi_start_year
+                        and current_month < (loan.emi_start_month or 1)
+                    )
+                )
+                is_active_emi = loan.emi_start_year and (
+                    current_year > loan.emi_start_year
+                    or (
+                        current_year == loan.emi_start_year
+                        and current_month >= (loan.emi_start_month or 1)
+                    )
+                )
+                has_ended = (
+                    loan.emi_end_year
+                    and loan.emi_end_month
+                    and (
+                        current_year > loan.emi_end_year
+                        or (
+                            current_year == loan.emi_end_year
+                            and current_month > loan.emi_end_month
+                        )
+                    )
+                )
+
+                if has_ended or not prev_loan_balance:
+                    current_asset_values[item.id] = prev_loan_balance
+                    print(
+                        f"[Loan-{item.name}] ended or no balance: {prev_loan_balance}"
+                    )
+                    continue
+
+                interest = round(prev_loan_balance * (loan.interest_rate or 0) / 1200)
+
+                if is_pre_emi:
+                    current_asset_values[item.id] = prev_loan_balance
+                    print(
+                        f"[Loan-{item.name}] pre-emi: balance={prev_loan_balance}, interest={interest}"
+                    )
+                elif is_active_emi:
+                    emi = loan.fixed_emi_amount or 0
+                    principal = emi - interest
+                    new_balance = max(0, prev_loan_balance - principal)
+                    current_asset_values[item.id] = new_balance
+                    print(
+                        f"[Loan-{item.name}] active: balance={prev_loan_balance}, interest={interest}, principal={principal}, emi={emi}, new_balance={new_balance}"
+                    )
+                else:
+                    current_asset_values[item.id] = prev_loan_balance
                 continue
 
             prev_value = prev_item_values.get(item.id, 0)
@@ -1032,8 +1325,7 @@ def generate_months(
 
             current_asset_values[item.id] = new_value
 
-        # Load previous month income/expense values so recurring amounts and loan balances
-        # can be rolled forward into the target month.
+        # Load previous month income/expense values
         ie_values = (
             db.query(IncomeExpenseValueModel)
             .filter(
@@ -1045,104 +1337,138 @@ def generate_months(
             .all()
         )
         prev_ie_values = {v.item_id: v.value for v in ie_values}
-        prev_ie_balances = {
-            v.item_id: v.balance_outstanding
-            if v.balance_outstanding is not None
-            else v.value
-            for v in ie_values
-        }
 
-        loan_balance_outstanding = {}
-
-        # Track newly calculated IE values for this month (for asset link calculation)
+        # Track newly calculated IE values
         new_ie_values = {}
 
+        # First, calculate interest/principal values for loan-linked IE items
+        ie_items_linked_to_loans = (
+            db.query(IncomeExpenseModel)
+            .filter(IncomeExpenseModel.associated_asset_id.in_(loan_ids))
+            .all()
+        )
+        for ie_item in ie_items_linked_to_loans:
+            if not is_active_in_month(ie_item, current_month, current_year):
+                continue
+            if not applies_this_month(ie_item, current_month):
+                continue
+
+            loan_id = ie_item.associated_asset_id
+            loan = loan_assets.get(loan_id)
+            if not loan:
+                continue
+
+            loan_balance = current_asset_values.get(loan_id, 0)
+
+            is_pre_emi = loan.emi_start_year and (
+                current_year < loan.emi_start_year
+                or (
+                    current_year == loan.emi_start_year
+                    and current_month < (loan.emi_start_month or 1)
+                )
+            )
+            is_active_emi = loan.emi_start_year and (
+                current_year > loan.emi_start_year
+                or (
+                    current_year == loan.emi_start_year
+                    and current_month >= (loan.emi_start_month or 1)
+                )
+            )
+            has_ended = (
+                loan.emi_end_year
+                and loan.emi_end_month
+                and (
+                    current_year > loan.emi_end_year
+                    or (
+                        current_year == loan.emi_end_year
+                        and current_month > loan.emi_end_month
+                    )
+                )
+            )
+
+            if has_ended or not loan_balance:
+                new_ie_values[ie_item.id] = {
+                    "value": 0,
+                    "interest_amount": 0,
+                    "principal_amount": 0,
+                }
+                continue
+
+            interest = round(loan_balance * (loan.interest_rate or 0) / 1200)
+
+            if is_pre_emi:
+                new_ie_values[ie_item.id] = {
+                    "value": interest,
+                    "interest_amount": interest,
+                    "principal_amount": 0,
+                }
+                print(f"[Loan-IE-{ie_item.name}] pre-emi: interest={interest}")
+            elif is_active_emi:
+                emi = loan.fixed_emi_amount or 0
+                principal = max(0, emi - interest)
+                new_ie_values[ie_item.id] = {
+                    "value": interest + principal,
+                    "interest_amount": interest,
+                    "principal_amount": principal,
+                }
+                print(
+                    f"[Loan-IE-{ie_item.name}] active: interest={interest}, principal={principal}, total={interest + principal}"
+                )
+
+        # Then process regular IE items (not linked to loans)
         ie_items = db.query(IncomeExpenseModel).all()
         for item in ie_items:
             if not is_active_in_month(item, current_month, current_year):
                 continue
+            if not applies_this_month(item, current_month):
+                continue
+            if item.associated_asset_id and item.associated_asset_id in loan_ids:
+                continue
 
             prev_value = prev_ie_values.get(item.id, 0)
-            new_balance = None
+            freq = item.appreciation_frequency
+            new_value = apply_appreciation(
+                prev_value,
+                item.appreciation_rate,
+                freq,
+                current_month,
+            )
+            new_ie_values[item.id] = {
+                "value": new_value,
+                "interest_amount": None,
+                "principal_amount": None,
+            }
+            print(
+                f"[IE-{item.name}] prev={prev_value}, appreciation_rate={item.appreciation_rate}, freq={freq} -> new={new_value}"
+            )
 
-            is_loan = item.interest_rate and item.emi_start_year
-
-            if is_loan:
-                if not prev_ie_balances.get(item.id):
-                    print(
-                        f"[Loan-{item.name}] skipping: no balance_outstanding in source month"
-                    )
-                    continue
-
-                outstanding = prev_ie_balances[item.id]
-
-                is_pre_emi = item.emi_start_year and (
-                    current_year < item.emi_start_year
-                    or (
-                        current_year == item.emi_start_year
-                        and current_month < (item.emi_start_month or 1)
-                    )
-                )
-
-                if is_pre_emi or not item.fixed_emi_amount:
-                    new_value = round(outstanding * item.interest_rate / 1200)
-                    new_balance = outstanding
-                    print(
-                        f"[Loan-{item.name}] pre_emi: outstanding={outstanding}, interest={new_value}, rate={item.interest_rate}"
-                    )
-                else:
-                    comps = calculate_loan_components(
-                        outstanding, item.interest_rate, item.fixed_emi_amount
-                    )
-                    new_balance = comps["new_balance"]
-                    loan_balance_outstanding[item.id] = new_balance
-
-                    print(
-                        f"[Loan-{item.name}] outstanding={outstanding}, emi={item.fixed_emi_amount}, rate={item.interest_rate}"
-                    )
-                    print(
-                        f"  -> principal={comps['principal']}, interest={comps['interest']}, new_balance={new_balance}"
-                    )
-                    new_value = item.fixed_emi_amount
-            else:
-                freq = item.appreciation_frequency
-                new_value = apply_appreciation(
-                    prev_value,
-                    item.appreciation_rate,
-                    freq,
-                    current_month,
-                )
-                print(
-                    f"[IE-{item.name}] prev={prev_value}, appreciation_rate={item.appreciation_rate}, freq={freq} -> new={new_value}"
-                )
-
+        # Save all IE values
+        for item_id, ie_data in new_ie_values.items():
             existing = (
                 db.query(IncomeExpenseValueModel)
                 .filter(
                     and_(
                         IncomeExpenseValueModel.month == current_month,
                         IncomeExpenseValueModel.year == current_year,
-                        IncomeExpenseValueModel.item_id == item.id,
+                        IncomeExpenseValueModel.item_id == item_id,
                     )
                 )
                 .first()
             )
-            new_balance = new_balance if is_loan else None
             if existing:
-                existing.value = new_value
-                existing.balance_outstanding = new_balance
+                existing.value = ie_data["value"]
+                existing.interest_amount = ie_data.get("interest_amount")
+                existing.principal_amount = ie_data.get("principal_amount")
             else:
                 new_val = IncomeExpenseValueModel(
                     month=current_month,
                     year=current_year,
-                    item_id=item.id,
-                    value=new_value,
-                    balance_outstanding=new_balance,
+                    item_id=item_id,
+                    value=ie_data["value"],
+                    interest_amount=ie_data.get("interest_amount"),
+                    principal_amount=ie_data.get("principal_amount"),
                 )
                 db.add(new_val)
-
-            # Track for asset link calculation
-            new_ie_values[item.id] = new_value
 
         ie_items = (
             db.query(IncomeExpenseModel)
@@ -1155,6 +1481,8 @@ def generate_months(
         )
 
         for ie_item in ie_items:
+            if ie_item.associated_asset_id in loan_ids:
+                continue
             if not is_active_in_month(ie_item, current_month, current_year):
                 print(
                     f"[AssetLink] SKIP {ie_item.name}: not active in {current_month}/{current_year}"

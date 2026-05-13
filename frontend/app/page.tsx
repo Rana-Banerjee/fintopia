@@ -2,10 +2,10 @@
 
 import { useState, useEffect } from "react";
 import {
-  getItems,
-  createItem,
-  deleteItem,
-  updateItem,
+  getAssetsLiabilities,
+  createAssetLiability,
+  deleteAssetLiability,
+  updateAssetLiability,
   getMonthValues,
   saveMonthValues,
   getSnapshots,
@@ -17,10 +17,8 @@ import {
   updateIncomeExpense,
   getIncomeExpenseValues,
   saveIncomeExpenseValues,
-  getLoanOutstandingBalances,
-  saveLoanOutstandingBalances,
   generateMonths,
-  Item,
+  AssetLiability,
   IncomeExpense,
   Summary,
   Snapshot,
@@ -52,6 +50,8 @@ import {
   createEvent,
   updateEvent,
   deleteEvent,
+  applyEvent,
+  regenerateAll,
   Event,
   EventImpact,
 } from "@/lib/api";
@@ -78,7 +78,7 @@ const APPRECIATION_FREQUENCIES = [
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<"dashboard" | "projection">("dashboard");
-  const [items, setItems] = useState<Item[]>([]);
+  const [items, setItems] = useState<AssetLiability[]>([]);
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [chartSummaries, setChartSummaries] = useState<Summary[]>([]);
@@ -95,18 +95,18 @@ export default function Home() {
     end_month: "",
     end_year: "",
     order: 0,
+    associated_asset_id: "",
     interest_rate: "",
     emi_start_month: "",
     emi_start_year: "",
     emi_end_month: "",
     emi_end_year: "",
-    associated_asset_id: "",
-    is_fixed_emi: false,
-    fixed_emi_amount: "",
-  });
+      is_fixed_emi: false,
+      fixed_emi_amount: "",
+      is_loan: false,
+    });
   const [editingIeId, setEditingIeId] = useState<string | null>(null);
   const [ieValues, setIeValues] = useState<Record<string, number>>({});
-  const [loanBalances, setLoanBalances] = useState<Record<string, number>>({});
 
   const [currentMonth, setCurrentMonth] = useState(() => {
     const now = new Date();
@@ -127,7 +127,7 @@ export default function Home() {
   const [generateNumMonths, setGenerateNumMonths] = useState(1);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"assets" | "liabilities" | "income" | "regular_expenses" | "loan_expenses" | "events">("assets");
+  const [settingsTab, setSettingsTab] = useState<"assets" | "liabilities" | "income" | "regular_expenses" | "loans" | "events">("assets");
   const [itemOrder, setItemOrder] = useState<Record<string, string[]>>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("itemOrder");
@@ -192,6 +192,13 @@ export default function Home() {
     start_year: "",
     end_month: "",
     end_year: "",
+    loan_balance: "",
+    interest_rate: "",
+    emi_start_month: "",
+    emi_start_year: "",
+    emi_end_month: "",
+    emi_end_year: "",
+    fixed_emi_amount: "",
   });
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
@@ -206,7 +213,6 @@ export default function Home() {
     if (selectedMonthTab) {
       loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
       loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
-      loadLoanBalances(selectedMonthTab.month, selectedMonthTab.year);
     }
   }, [selectedMonthTab, incomeExpenses]);
 
@@ -218,9 +224,9 @@ export default function Home() {
     } else if (settingsTab === "liabilities") {
       setEditingItemId(() => null);
       setItemForm(prev => ({ ...prev, item_type: "liability", liquidity: "fixed" }));
-    } else if (settingsTab === "loan_expenses") {
-      setEditingIeId(() => null);
-      setIeForm(prev => ({ ...prev, ie_type: "expense" }));
+    } else if (settingsTab === "loans") {
+      setEditingItemId(() => null);
+      setItemForm(prev => ({ ...prev, item_type: "liability", liquidity: "fixed", loan_balance: "0", interest_rate: "", emi_start_month: "", emi_start_year: "", emi_end_month: "", emi_end_year: "", fixed_emi_amount: "" }));
     } else if (settingsTab === "income") {
       setEditingIeId(() => null);
       setIeForm(prev => ({ ...prev, ie_type: "income" }));
@@ -234,9 +240,12 @@ export default function Home() {
   }, [settingsTab]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  async function fetchData() {
+  async function fetchData(regenerate: boolean = false) {
+    if (regenerate) {
+      await regenerateAll();
+    }
     const [itemsData, snapshotsData, ieData, eventsData] = await Promise.all([
-      getItems(),
+      getAssetsLiabilities(),
       getSnapshots(),
       getIncomeExpenses(),
       getEvents(),
@@ -258,7 +267,6 @@ export default function Home() {
     if (selectedMonthTab) {
       loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
       loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
-      loadLoanBalances(selectedMonthTab.month, selectedMonthTab.year);
     } else if (snapshotsData.length > 0) {
       setSelectedMonthTab(snapshotsData[0]);
     }
@@ -271,11 +279,6 @@ export default function Home() {
       valueMap[v.item_id] = v.value;
     });
     setIeValues(valueMap);
-  }
-
-  async function loadLoanBalances(month: number, year: number) {
-    const balances = await getLoanOutstandingBalances(month, year);
-    setLoanBalances(balances);
   }
 
   async function loadMonthValues(month: number, year: number) {
@@ -313,6 +316,23 @@ export default function Home() {
   async function handleSaveItem(e: React.FormEvent) {
     e.preventDefault();
     if (!itemForm.name) return;
+    if (settingsTab === "loans") {
+      if (!itemForm.interest_rate) {
+        alert("Please enter the interest rate");
+        return;
+      }
+      if (!itemForm.emi_start_month || !itemForm.emi_start_year || !itemForm.emi_end_month || !itemForm.emi_end_year) {
+        alert("EMI start and end dates are required for loans");
+        return;
+      }
+      const emiStartDate = new Date(parseInt(itemForm.emi_start_year), parseInt(itemForm.emi_start_month) - 1, 1);
+      const now = new Date();
+      now.setDate(1);
+      if (emiStartDate <= now && !itemForm.fixed_emi_amount) {
+        alert("Fixed EMI amount is required when EMI has already started");
+        return;
+      }
+    }
 
     const payload = {
       name: itemForm.name,
@@ -329,13 +349,23 @@ export default function Home() {
       start_year: itemForm.start_year ? parseInt(itemForm.start_year) : null,
       end_month: itemForm.end_month ? parseInt(itemForm.end_month) : null,
       end_year: itemForm.end_year ? parseInt(itemForm.end_year) : null,
+      loan_balance: itemForm.loan_balance ? parseFloat(itemForm.loan_balance) : null,
+      interest_rate: itemForm.interest_rate ? parseFloat(itemForm.interest_rate) : null,
+      emi_start_month: itemForm.emi_start_month ? parseInt(itemForm.emi_start_month) : null,
+      emi_start_year: itemForm.emi_start_year ? parseInt(itemForm.emi_start_year) : null,
+      emi_end_month: itemForm.emi_end_month ? parseInt(itemForm.emi_end_month) : null,
+      emi_end_year: itemForm.emi_end_year ? parseInt(itemForm.emi_end_year) : null,
+      fixed_emi_amount: itemForm.fixed_emi_amount ? parseFloat(itemForm.fixed_emi_amount) : null,
+      is_loan: settingsTab === "loans",
     };
 
     if (editingItemId !== null) {
-      await updateItem(editingItemId, payload);
+      await updateAssetLiability(editingItemId, payload);
       handleCancelItemEdit();
+      fetchData(true);
     } else {
-      await createItem(payload);
+      await createAssetLiability(payload);
+      fetchData(true);
       setItemForm({
         name: "",
         item_type: itemForm.item_type,
@@ -346,17 +376,24 @@ export default function Home() {
         start_year: "",
         end_month: "",
         end_year: "",
+        loan_balance: "",
+        interest_rate: "",
+        emi_start_month: "",
+        emi_start_year: "",
+        emi_end_month: "",
+        emi_end_year: "",
+        fixed_emi_amount: "",
       });
     }
-    fetchData();
+    fetchData(true);
   }
 
   async function handleDeleteItem(id: string) {
-    await deleteItem(id);
-    fetchData();
+    await deleteAssetLiability(id);
+    fetchData(true);
   }
 
-  function handleEditItem(item: Item) {
+  function handleEditItem(item: AssetLiability) {
     setEditingItemId(item.id);
     setItemForm({
       name: item.name,
@@ -368,6 +405,13 @@ export default function Home() {
       start_year: item.start_year?.toString() || "",
       end_month: item.end_month?.toString() || "",
       end_year: item.end_year?.toString() || "",
+      loan_balance: item.loan_balance?.toString() || "",
+      interest_rate: item.interest_rate?.toString() || "",
+      emi_start_month: item.emi_start_month?.toString() || "",
+      emi_start_year: item.emi_start_year?.toString() || "",
+      emi_end_month: item.emi_end_month?.toString() || "",
+      emi_end_year: item.emi_end_year?.toString() || "",
+      fixed_emi_amount: item.fixed_emi_amount?.toString() || "",
     });
   }
 
@@ -385,6 +429,13 @@ export default function Home() {
       start_year: "",
       end_month: "",
       end_year: "",
+      loan_balance: "",
+      interest_rate: "",
+      emi_start_month: "",
+      emi_start_year: "",
+      emi_end_month: "",
+      emi_end_year: "",
+      fixed_emi_amount: "",
     });
   }
 
@@ -421,6 +472,7 @@ export default function Home() {
       associated_asset_id: ieForm.associated_asset_id || null,
       is_fixed_emi: ieForm.is_fixed_emi,
       fixed_emi_amount: ieForm.fixed_emi_amount ? parseFloat(ieForm.fixed_emi_amount) : null,
+      is_loan: ieForm.is_loan,
     };
 
     if (editingIeId !== null) {
@@ -453,14 +505,15 @@ export default function Home() {
         associated_asset_id: "",
         is_fixed_emi: false,
         fixed_emi_amount: "",
+        is_loan: false,
       });
     }
-    fetchData();
+    fetchData(true);
   }
 
   async function handleDeleteIe(id: string) {
     await deleteIncomeExpense(id);
-    fetchData();
+    fetchData(true);
   }
 
   async function handleEditIe(ie: IncomeExpense) {
@@ -486,6 +539,7 @@ export default function Home() {
       associated_asset_id: ie.associated_asset_id?.toString() || "",
       is_fixed_emi: ie.is_fixed_emi ?? false,
       fixed_emi_amount: ie.fixed_emi_amount?.toString() || "",
+      is_loan: ie.is_loan,
     });
   }
 
@@ -511,6 +565,7 @@ export default function Home() {
       associated_asset_id: "",
       is_fixed_emi: false,
       fixed_emi_amount: "",
+      is_loan: false,
     });
   }
 
@@ -521,11 +576,6 @@ export default function Home() {
 
   function handleIeValueChange(itemId: string, value: string) {
     setIeValues({ ...ieValues, [itemId]: parseFloat(value) || 0 });
-    setHasChanges(true);
-  }
-
-  function handleLoanBalanceChange(loanId: string, value: string) {
-    setLoanBalances({ ...loanBalances, [loanId]: parseFloat(value) || 0 });
     setHasChanges(true);
   }
 
@@ -589,7 +639,7 @@ export default function Home() {
       await updateEvent(editingEventId, payload as Omit<Event, "id">);
     }
     setEditingEventId(null);
-    fetchData();
+    fetchData(true);
   }
 
   function isIeApplicable(frequency: string, month: number): boolean {
@@ -614,13 +664,31 @@ export default function Home() {
         fullValues[item.id] = 0;
       }
     });
-    allLoans.forEach(loan => {
-      delete fullValues[loan.id];
+    loanAssets.forEach(loan => {
+      if (fullValues[loan.id] === undefined) {
+        fullValues[loan.id] = loan.loan_balance ?? 0;
+      }
     });
+    const ieValuesWithLoans = { ...ieValues };
+    const loanIeItems = incomeExpenses.filter(i => i.is_loan);
+    const month = selectedMonthTab.month;
+    const year = selectedMonthTab.year;
+    for (const ie of loanIeItems) {
+      const loan = loanAssets.find(l => l.id === ie.associated_asset_id);
+      if (!loan) continue;
+      const phase = getLoanPhase(loan, month, year);
+      if (phase === "ended") {
+        ieValuesWithLoans[ie.id] = 0;
+      } else if (phase === "active" && loan.fixed_emi_amount) {
+        ieValuesWithLoans[ie.id] = loan.fixed_emi_amount;
+      } else if (phase === "pre_emi" && loan.interest_rate) {
+        const balance = monthValues[loan.id] ?? loan.loan_balance ?? 0;
+        ieValuesWithLoans[ie.id] = Math.round(balance * loan.interest_rate / 1200);
+      }
+    }
     await Promise.all([
       saveMonthValues(selectedMonthTab.month, selectedMonthTab.year, fullValues),
-      saveIncomeExpenseValues(selectedMonthTab.month, selectedMonthTab.year, ieValues),
-      saveLoanOutstandingBalances(selectedMonthTab.month, selectedMonthTab.year, loanBalances),
+      saveIncomeExpenseValues(selectedMonthTab.month, selectedMonthTab.year, ieValuesWithLoans),
     ]);
     setHasChanges(false);
     fetchData();
@@ -630,7 +698,6 @@ export default function Home() {
     if (!selectedMonthTab) return;
     loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
     loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
-    loadLoanBalances(selectedMonthTab.month, selectedMonthTab.year);
   }
 
   async function handleDeleteSnapshot(month: number, year: number) {
@@ -638,7 +705,7 @@ export default function Home() {
     const remaining = snapshots.filter(s => s.month !== month || s.year !== year);
     
     await deleteSnapshot(month, year);
-    await fetchData();
+    await fetchData(true);
     
     if (wasSelected && remaining.length > 0) {
       setSelectedMonthTab(remaining[remaining.length - 1]);
@@ -675,7 +742,7 @@ export default function Home() {
     localStorage.setItem("expandedGroups", JSON.stringify(newState));
   }
 
-  function getOrderedItems(groupItems: Item[], groupKey: string): Item[] {
+  function getOrderedItems(groupItems: AssetLiability[], groupKey: string): AssetLiability[] {
     const order = itemOrder[groupKey] || [];
     return [...groupItems].sort((a, b) => {
       const idxA = order.indexOf(a.id);
@@ -718,10 +785,11 @@ export default function Home() {
       associated_asset_id: "",
       is_fixed_emi: false,
       fixed_emi_amount: "",
+      is_loan: isLoan,
     });
   }
 
-  function handleDragEnd(event: DragEndEvent, groupKey: string, groupItems: Item[]) {
+  function handleDragEnd(event: DragEndEvent, groupKey: string, groupItems: AssetLiability[]) {
     const { active, over } = event;
     if (!over || active.id === over.id) return;
 
@@ -793,7 +861,7 @@ export default function Home() {
     localStorage.setItem("ieOrder", JSON.stringify(newOrder));
   }
 
-  function SortableItem({ item }: { item: Item }) {
+  function SortableItem({ item }: { item: AssetLiability }) {
     const {
       attributes,
       listeners,
@@ -860,13 +928,14 @@ export default function Home() {
       opacity: isDragging ? 0.5 : 1,
     };
 
-    const isLoan = !!ie.interest_rate;
+    const loanIds = new Set(items.filter((i) => i.is_loan).map((i) => i.id));
+    const isLoan = !!(ie.associated_asset_id && loanIds.has(ie.associated_asset_id));
 
     return (
       <div
         ref={setNodeRef}
         style={style}
-        className="flex items-center justify-between"
+        className={`flex items-center justify-between ${isLoan ? "bg-purple-50 border border-purple-200 rounded px-3 py-2" : ""}`}
       >
         <div className="flex items-center gap-2">
           <button
@@ -882,7 +951,7 @@ export default function Home() {
             ({FREQUENCY_OPTIONS.find(f => f.value === ie.frequency)?.label})
           </span>
           {isLoan && (
-            <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">Loan</span>
+            <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">{ie.name}</span>
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -906,6 +975,7 @@ export default function Home() {
   async function handleCreateMonth(month: number, year: number, copyFrom: string) {
     if (!snapshots.find((s) => s.month === month && s.year === year)) {
       const initialValues: Record<string, number> = {};
+      const initialIeValues: Record<string, number> = {};
       
       if (copyFrom) {
         const [srcMonth, srcYear] = copyFrom.split("-").map(Number);
@@ -913,14 +983,22 @@ export default function Home() {
         srcValues.forEach((v) => {
           initialValues[v.item_id] = v.value;
         });
+        const srcIeValues = await getIncomeExpenseValues(srcMonth, srcYear);
+        srcIeValues.forEach((v) => {
+          initialIeValues[v.item_id] = v.value;
+        });
       } else {
         [...orderedAssetItems, ...orderedLiabilityItems].forEach((item) => {
           initialValues[item.id] = 0;
         });
+        incomeExpenses.forEach((item) => {
+          initialIeValues[item.id] = 0;
+        });
       }
       
       await saveMonthValues(month, year, initialValues);
-      await fetchData();
+      await saveIncomeExpenseValues(month, year, initialIeValues);
+      await fetchData(true);
       setSelectedMonthTab({ month, year });
       setAddMonthPopoverOpen(false);
     }
@@ -938,58 +1016,41 @@ export default function Home() {
   };
 
   const orderedAssetItems = getOrderedItemsByType("asset");
-  const orderedLiabilityItems = getOrderedItemsByType("liability");
+  const orderedLiabilityItems = getOrderedItemsByType("liability").filter(i => !i.is_loan);
 
-  function computeLoanEmi(P: number, annualRate: number, emiEndMonth: number | null, emiEndYear: number | null, emiStartMonth: number, emiStartYear: number, currentMonth: number, currentYear: number): number | null {
-    if (P <= 0 || !annualRate) return null;
-    const monthlyRate = annualRate / 100 / 12;
-    let n = 12;
-    if (emiEndYear && emiEndMonth) {
-      const totalMonths = (emiEndYear - emiStartYear) * 12 + (emiEndMonth - emiStartMonth);
-      const elapsed = (currentYear - emiStartYear) * 12 + (currentMonth - emiStartMonth);
-      n = Math.max(1, totalMonths - elapsed);
-    }
-    if (n <= 0 || monthlyRate <= 0) return null;
-    const emi = P * monthlyRate * (Math.pow(1 + monthlyRate, n)) / (Math.pow(1 + monthlyRate, n) - 1);
-    return Math.round(emi);
-  }
-
-  function getLoanPhase(loan: IncomeExpense, month: number, year: number): "pre_emi" | "active" | "ended" {
+  function getLoanPhase(loan: AssetLiability, month: number, year: number): "pre_emi" | "active" | "ended" {
     if (loan.emi_end_month && loan.emi_end_year) {
       const isEnded = (year > loan.emi_end_year) || (year === loan.emi_end_year && month > loan.emi_end_month);
       if (isEnded) return "ended";
     }
     const isFutureEmi = (year < loan.emi_start_year!) || (year === loan.emi_start_year! && month < loan.emi_start_month!);
-    if (isFutureEmi && !loan.is_fixed_emi) return "pre_emi";
+    if (isFutureEmi && !loan.fixed_emi_amount) return "pre_emi";
     return "active";
   }
 
   const month = selectedMonthTab?.month ?? 1;
   const applicableIncome = incomeExpenses.filter(i => i.ie_type === "income" && isIeApplicable(i.frequency, month));
-  const applicableExpenses = incomeExpenses.filter(i => i.ie_type === "expense" && isIeApplicable(i.frequency, month) && !i.interest_rate);
+  const applicableExpenses = incomeExpenses.filter(i => i.ie_type === "expense" && isIeApplicable(i.frequency, month) && !i.is_loan);
   const incomeSum = applicableIncome.reduce((sum, ie) => sum + Math.round(ieValues[ie.id] ?? 0), 0);
   const expenseSum = applicableExpenses.reduce((sum, ie) => sum + Math.round(ieValues[ie.id] ?? 0), 0);
   const assetsTotal = orderedAssetItems.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
   const liabilitiesTotal = orderedLiabilityItems.reduce((sum, item) => sum + (monthValues[item.id] ?? 0), 0);
 
-  const allLoans = incomeExpenses.filter(i => i.ie_type === "expense" && !!i.interest_rate);
-  const visibleLoans = allLoans.filter(loan => {
+  const loanAssets = items.filter(i => i.is_loan);
+  const visibleLoans = loanAssets.filter(loan => {
     const phase = getLoanPhase(loan, month, selectedMonthTab?.year ?? 2026);
     return phase !== "ended";
   });
-  const loansTotal = visibleLoans.reduce((sum, loan) => sum + Math.round(loanBalances[loan.id] ?? loan.balance_disbursed ?? 0), 0);
+  const loansTotal = visibleLoans.reduce((sum, loan) => sum + Math.round(monthValues[loan.id] ?? loan.loan_balance ?? 0), 0);
   const totalEmiExpense = visibleLoans.reduce((sum, loan) => {
     const phase = getLoanPhase(loan, month, selectedMonthTab?.year ?? 2026);
-    const outstanding = loanBalances[loan.id] ?? loan.balance_disbursed ?? 0;
-    let emi = null;
-    if (phase === "active") {
-      emi = loan.is_fixed_emi && loan.fixed_emi_amount
-        ? loan.fixed_emi_amount
-        : computeLoanEmi(outstanding, loan.interest_rate ?? 0, loan.emi_end_month, loan.emi_end_year, loan.emi_start_month ?? 1, loan.emi_start_year ?? 2026, month, selectedMonthTab?.year ?? 2026);
-    } else if (phase === "pre_emi") {
-      emi = Math.round(outstanding * (loan.interest_rate ?? 0) / 1200);
+    const outstanding = monthValues[loan.id] ?? loan.loan_balance ?? 0;
+    if (phase === "active" && loan.fixed_emi_amount) {
+      return sum + loan.fixed_emi_amount;
+    } else if (phase === "pre_emi" && loan.interest_rate) {
+      return sum + Math.round(outstanding * loan.interest_rate / 1200);
     }
-    return sum + (emi ?? 0);
+    return sum;
   }, 0);
 
   const sortedSnapshots = [...snapshots].sort((a, b) => {
@@ -1123,6 +1184,25 @@ export default function Home() {
               >
                 Generate Month
               </button>
+              <button
+                onClick={() => {
+                  setEventForm({
+                    name: "",
+                    is_recurring: false,
+                    start_month: String(currentMonth),
+                    start_year: String(currentYear),
+                    frequency_months: "",
+                    duration: "1",
+                    impacts: [],
+                  });
+                  setEditingEventId("new");
+                  setSettingsTab("events");
+                  setSettingsOpen(true);
+                }}
+                className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700"
+              >
+                Add Event
+              </button>
               {hasChanges && (
                 <div className="flex items-center gap-2">
                   <button
@@ -1140,6 +1220,91 @@ export default function Home() {
                 </div>
               )}
             </div>
+
+            {events.length > 0 && (
+              <div className="bg-white p-4 rounded-lg shadow">
+                <div className="flex justify-between items-center mb-3 pb-2 border-b">
+                  <h2 className="text-lg font-semibold text-amber-600">Events</h2>
+                  <button
+                    onClick={() => {
+                      setEventForm({
+                        name: "",
+                        is_recurring: false,
+                        start_month: String(currentMonth),
+                        start_year: String(currentYear),
+                        frequency_months: "",
+                        duration: "1",
+                        impacts: [],
+                      });
+                      setEditingEventId("new");
+                      setSettingsTab("events");
+                      setSettingsOpen(true);
+                    }}
+                    className="px-3 py-1 text-sm bg-amber-100 text-amber-700 rounded hover:bg-amber-200"
+                  >
+                    + Add Event
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {events.map(event => (
+                    <div key={event.id} className="border border-amber-200 bg-amber-50 rounded-lg p-3">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="font-semibold text-amber-800">{event.name}</h4>
+                          <p className="text-xs text-amber-600">
+                            {event.start_month}/{event.start_year} · {" "}
+                            {event.is_recurring
+                              ? `Every ${event.frequency_months}mo × ${event.duration}`
+                              : "One-time"}
+                          </p>
+                          {event.impacts.length > 0 && (
+                            <ul className="mt-1 text-xs text-amber-700">
+                              {event.impacts.map((imp, idx) => (
+                                <li key={idx}>
+                                  {imp.is_additive ? "+" : "-"}{imp.amount.toLocaleString('en-IN')} {imp.target_type}/{getTargetLabel(imp.target_type, imp.target_id)}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={async () => {
+                              await applyEvent(event.id);
+                              fetchData(true);
+                            }}
+                            className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                          >
+                            Apply
+                          </button>
+                          <button
+                            onClick={() => {
+                              startEditEvent(event);
+                              setSettingsTab("events");
+                              setSettingsOpen(true);
+                            }}
+                            className="px-2 py-1 text-xs bg-amber-200 text-amber-800 rounded hover:bg-amber-300"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (confirm("Delete this event? All future months will be recalculated.")) {
+                                await deleteEvent(event.id);
+                                fetchData(true);
+                              }
+                            }}
+                            className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {snapshots.length > 0 && (
               <div className="flex flex-wrap gap-2">
@@ -1343,28 +1508,26 @@ export default function Home() {
                             <tbody>
                             {visibleLoans.map(loan => {
                               const phase = getLoanPhase(loan, month, selectedMonthTab?.year ?? 2026);
-                              const outstanding = loanBalances[loan.id] ?? loan.balance_disbursed ?? 0;
-                              const emi = phase === "active"
-                                ? loan.is_fixed_emi && loan.fixed_emi_amount
-                                  ? loan.fixed_emi_amount
-                                  : computeLoanEmi(outstanding, loan.interest_rate ?? 0, loan.emi_end_month, loan.emi_end_year, loan.emi_start_month ?? 1, loan.emi_start_year ?? 2026, month, selectedMonthTab?.year ?? 2026)
-                                : phase === "pre_emi"
-                                  ? Math.round(outstanding * (loan.interest_rate ?? 0) / 1200)
-                                  : null;
+                              const outstanding = monthValues[loan.id] ?? loan.loan_balance ?? 0;
+                              const emi = (phase === "active" && loan.fixed_emi_amount)
+                                ? loan.fixed_emi_amount
+                                : (phase === "pre_emi" && loan.interest_rate)
+                                  ? Math.round(outstanding * loan.interest_rate / 1200)
+                                  : 0;
                               return (
                                 <tr key={loan.id} className="border-b border-purple-100 last:border-b-0">
                                   <td className="py-1.5 font-medium text-gray-700">{loan.name}</td>
                                   <td className="py-1.5 text-right">
                                     <input
                                       type="number"
-                                      value={loanBalances[loan.id] ?? ""}
-                                      placeholder={(loan.balance_disbursed ?? 0).toString()}
-                                      onChange={e => handleLoanBalanceChange(loan.id, e.target.value)}
+                                      value={monthValues[loan.id] ?? ""}
+                                      placeholder={(loan.loan_balance ?? 0).toString()}
+                                      onChange={e => handleValueChange(loan.id, e.target.value)}
                                       className="w-32 px-2 py-0.5 border rounded text-right text-sm"
                                     />
                                   </td>
                                   <td className="py-1.5 text-right text-gray-600">
-                                    {emi != null ? `₹${emi.toLocaleString('en-IN')}` : "—"}
+                                    {emi > 0 ? `₹${emi.toLocaleString('en-IN')}` : "—"}
                                   </td>
                                   <td className="py-1.5 text-right">
                                     <span className={`text-xs px-1.5 py-0.5 rounded ${
@@ -1435,7 +1598,7 @@ export default function Home() {
                     {expandedSections.expenses && (
                       <div className="space-y-2">
                         {(() => {
-                          const filtered = incomeExpenses.filter(i => i.ie_type === "expense" && !i.interest_rate && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1));
+                          const filtered = incomeExpenses.filter(i => i.ie_type === "expense" && !i.is_loan && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1));
                           return filtered.map(ie => (
                             <div key={ie.id} className="flex items-center gap-2">
                               <label className="flex-1 text-sm text-gray-700">{ie.name}</label>
@@ -1449,96 +1612,8 @@ export default function Home() {
                             </div>
                           ));
                         })()}
-                        {incomeExpenses.filter(i => i.ie_type === "expense" && !i.interest_rate && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1)).length === 0 && (
+                        {incomeExpenses.filter(i => i.ie_type === "expense" && !i.is_loan && isIeApplicable(i.frequency, selectedMonthTab?.month ?? 1)).length === 0 && (
                           <p className="text-sm text-gray-500">No regular expense items. Add in Settings.</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="bg-white p-4 rounded-lg shadow">
-                    <div className="flex justify-between items-center mb-3 pb-2 border-b">
-                      <button
-                        onClick={() => toggleSection("events")}
-                        className="flex items-center gap-2 text-lg font-semibold"
-                      >
-                        <span>{expandedSections.events ? "▼" : "▶"}</span>
-                        <span className="text-amber-600">Events</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setEventForm({
-                            name: "",
-                            is_recurring: false,
-                            start_month: String(selectedMonthTab?.month ?? currentMonth),
-                            start_year: String(selectedMonthTab?.year ?? currentYear),
-                            frequency_months: "",
-                            duration: "1",
-                            impacts: [],
-                          });
-                          setEditingEventId("new");
-                          setSettingsTab("events");
-                          setSettingsOpen(true);
-                        }}
-                        className="px-3 py-1 text-sm bg-amber-100 text-amber-700 rounded hover:bg-amber-200"
-                      >
-                        + Add Event
-                      </button>
-                    </div>
-                    {expandedSections.events && (
-                      <div className="space-y-2">
-                        {events.length === 0 ? (
-                          <p className="text-sm text-gray-500">No events tracked. Add one to see them here.</p>
-                        ) : (
-                          events.filter(e => eventAppliesInMonth(e, month, selectedMonthTab?.year ?? currentYear)).map(event => (
-                            <div key={event.id} className="border border-amber-200 bg-amber-50 rounded-lg p-3">
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <h4 className="font-semibold text-amber-800">{event.name}</h4>
-                                  <p className="text-xs text-amber-600">
-                                    {event.is_recurring
-                                      ? `Every ${event.frequency_months}mo × ${event.duration}`
-                                      : `One-time`}
-                                  </p>
-                                  {event.impacts.length > 0 && (
-                                    <ul className="mt-1 text-xs text-amber-700">
-                                      {event.impacts.map((imp, idx) => (
-                                        <li key={idx}>
-                                          {imp.is_additive ? "+" : "-"}{imp.amount.toLocaleString('en-IN')} {imp.target_type}/{getTargetLabel(imp.target_type, imp.target_id)}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  )}
-                                </div>
-                                <div className="flex gap-1">
-                                  <button
-                                    onClick={() => {
-                                      startEditEvent(event);
-                                      setSettingsTab("events");
-                                      setSettingsOpen(true);
-                                    }}
-                                    className="px-2 py-1 text-xs bg-amber-200 text-amber-800 rounded hover:bg-amber-300"
-                                  >
-                                    Edit
-                                  </button>
-                                  <button
-                                    onClick={async () => {
-                                      if (confirm("Delete this event? All future months will be recalculated.")) {
-                                        await deleteEvent(event.id);
-                                        fetchData();
-                                      }
-                                    }}
-                                    className="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
-                                  >
-                                    Delete
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                        {events.filter(e => eventAppliesInMonth(e, month, selectedMonthTab?.year ?? currentYear)).length === 0 && events.length > 0 && (
-                          <p className="text-xs text-gray-400 text-center">No events active this month</p>
                         )}
                       </div>
                     )}
@@ -1574,7 +1649,7 @@ export default function Home() {
               </div>
 
               <div className="flex border-b mb-4 overflow-x-auto">
-                {(["assets", "liabilities", "income", "regular_expenses", "loan_expenses", "events"] as const).map((tab) => (
+                {(["assets", "liabilities", "income", "regular_expenses", "loans", "events"] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setSettingsTab(tab)}
@@ -1585,7 +1660,6 @@ export default function Home() {
                     }`}
                   >
                     {tab === "regular_expenses" ? "Regular Expenses" :
-                     tab === "loan_expenses" ? "Loan Expenses" :
                      tab.charAt(0).toUpperCase() + tab.slice(1)}
                   </button>
                 ))}
@@ -1598,7 +1672,7 @@ export default function Home() {
                     <button
                       onClick={() => {
                         setEditingItemId(null);
-                        setItemForm({ name: "", item_type: "asset", liquidity: "liquid", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "" });
+                        setItemForm({ name: "", item_type: "asset", liquidity: "liquid", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "", loan_balance: "", interest_rate: "", emi_start_month: "", emi_start_year: "", emi_end_month: "", emi_end_year: "", fixed_emi_amount: "" });
                       }}
                       className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
                     >
@@ -1699,7 +1773,7 @@ export default function Home() {
                     <button
                       onClick={() => {
                         setEditingItemId(null);
-                        setItemForm({ name: "", item_type: "liability", liquidity: "fixed", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "" });
+                        setItemForm({ name: "", item_type: "liability", liquidity: "fixed", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "", loan_balance: "", interest_rate: "", emi_start_month: "", emi_start_year: "", emi_end_month: "", emi_end_year: "", fixed_emi_amount: "" });
                       }}
                       className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
                     >
@@ -1737,7 +1811,7 @@ export default function Home() {
                     </div>
                   </form>
                   {(["liquid", "fixed"] as const).map((liquidity) => {
-                    const allGroupItems = items.filter((i) => i.item_type === "liability" && i.liquidity === liquidity);
+                    const allGroupItems = items.filter((i) => i.item_type === "liability" && i.liquidity === liquidity && !i.is_loan);
                     if (allGroupItems.length === 0) return null;
                     const groupKey = `liability-${liquidity}`;
                     const groupItems = getOrderedItems(allGroupItems, groupKey);
@@ -1767,7 +1841,7 @@ export default function Home() {
                       </div>
                     );
                   })}
-                  {items.filter((i) => i.item_type === "liability").length === 0 && (
+                  {items.filter((i) => i.item_type === "liability" && !i.is_loan).length === 0 && (
                     <p className="text-gray-500 text-center py-4">No liabilities yet. Add one above.</p>
                   )}
                 </div>
@@ -1929,7 +2003,7 @@ export default function Home() {
                     </div>
                   </form>
                   {(() => {
-                    const regularExpenses = incomeExpenses.filter((i) => i.ie_type === "expense" && !i.interest_rate);
+                    const regularExpenses = incomeExpenses.filter((i) => i.ie_type === "expense" && !i.is_loan);
                     const ordered = getOrderedIeItems(regularExpenses);
                     if (ordered.length === 0) return <p className="text-gray-500 text-center py-4">No regular expenses yet. Add one above.</p>;
                     return (
@@ -1949,108 +2023,110 @@ export default function Home() {
                 </div>
               )}
 
-              {settingsTab === "loan_expenses" && (
+              {settingsTab === "loans" && (
                 <div>
                   <div className="flex justify-between items-center mb-3">
-                    <h4 className="text-lg font-medium">Loan Expenses</h4>
+                    <h4 className="text-lg font-medium">Loans</h4>
                     <button
-                      onClick={() => startAddIe("expense", true)}
+                      onClick={() => {
+                        setEditingItemId(null);
+                        setItemForm({ name: "", item_type: "liability", liquidity: "fixed", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "", loan_balance: "0", interest_rate: "", emi_start_month: "", emi_start_year: "", emi_end_month: "", emi_end_year: "", fixed_emi_amount: "" });
+                      }}
                       className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
                     >
                       + Add Loan
                     </button>
                   </div>
-                  <form onSubmit={handleSaveIe} className="space-y-3 mb-6 p-4 bg-gray-50 rounded-lg">
+                  <form onSubmit={handleSaveItem} className="space-y-3 mb-6 p-4 bg-gray-50 rounded-lg">
                     <div className="flex flex-wrap gap-3">
                       <input
                         type="text"
                         placeholder="Loan Name"
-                        value={ieForm.name}
-                        onChange={(e) => handleIeChange("name", e.target.value)}
+                        value={itemForm.name}
+                        onChange={(e) => handleItemChange("name", e.target.value)}
                         className="px-3 py-2 border rounded-lg flex-1 min-w-[150px]"
                       />
                       <input
                         type="number"
-                        placeholder="Interest Rate (%)"
-                        value={ieForm.interest_rate}
-                        onChange={(e) => handleIeChange("interest_rate", e.target.value)}
+                        placeholder="Loan Balance"
+                        value={itemForm.loan_balance}
+                        onChange={(e) => handleItemChange("loan_balance", e.target.value)}
                         className="px-3 py-2 border rounded-lg w-40"
-                        step="0.01"
+                      />
+                      <input
+                        type="number"
+                        placeholder="Interest Rate (%)"
+                        value={itemForm.interest_rate}
+                        onChange={(e) => handleItemChange("interest_rate", e.target.value)}
+                        className="px-3 py-2 border rounded-lg w-40"
                       />
                     </div>
-                    <div className="flex gap-1 items-center flex-wrap">
-                      <span className="text-sm text-gray-600 mr-2">EMI Start:</span>
-                      <input type="number" placeholder="Month" value={ieForm.emi_start_month} onChange={(e) => handleIeChange("emi_start_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
-                      <input type="number" placeholder="Year" value={ieForm.emi_start_year} onChange={(e) => handleIeChange("emi_start_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
-                      <span className="text-sm text-gray-600 mx-2">EMI End:</span>
-                      <input type="number" placeholder="Month" value={ieForm.emi_end_month} onChange={(e) => handleIeChange("emi_end_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
-                      <input type="number" placeholder="Year" value={ieForm.emi_end_year} onChange={(e) => handleIeChange("emi_end_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
+                    <div className="flex flex-wrap gap-3 items-center">
+                      <span className="text-sm text-gray-600">EMI Period:</span>
+                      <input type="number" placeholder="From M" value={itemForm.emi_start_month} onChange={(e) => handleItemChange("emi_start_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
+                      <input type="number" placeholder="Y" value={itemForm.emi_start_year} onChange={(e) => handleItemChange("emi_start_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
+                      <span className="text-gray-400 mx-1">to</span>
+                      <input type="number" placeholder="M" value={itemForm.emi_end_month} onChange={(e) => handleItemChange("emi_end_month", e.target.value)} className="px-2 py-1 border rounded-lg w-16" min={1} max={12} />
+                      <input type="number" placeholder="Y" value={itemForm.emi_end_year} onChange={(e) => handleItemChange("emi_end_year", e.target.value)} className="px-2 py-1 border rounded-lg w-20" />
                     </div>
                     <div className="flex flex-wrap gap-3">
-                      <div className="flex gap-1 items-center">
-                        <span className="text-sm text-gray-600">Against Asset:</span>
-                        <select
-                          value={ieForm.associated_asset_id}
-                          onChange={(e) => handleIeChange("associated_asset_id", e.target.value)}
-                          className="px-2 py-1 border rounded-lg"
-                        >
-                          <option value="">None</option>
-                          {items.filter((i) => i.item_type === "asset").map((asset) => (
-                            <option key={asset.id} value={asset.id}>{asset.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    </div>
-                    <div className="flex flex-wrap gap-4 items-center">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={ieForm.is_fixed_emi}
-                          onChange={(e) => handleIeChange("is_fixed_emi", e.target.checked)}
-                          className="w-4 h-4 rounded border-gray-300 text-purple-600 focus:ring-purple-500"
-                        />
-                        <span className="text-sm font-medium text-gray-700">Fixed EMI</span>
-                      </label>
-                      {ieForm.is_fixed_emi && (
-                        <div className="flex gap-1 items-center">
-                          <span className="text-sm text-gray-600">EMI Amount:</span>
-                          <input
-                            type="number"
-                            placeholder="Fixed EMI"
-                            value={ieForm.fixed_emi_amount}
-                            onChange={(e) => handleIeChange("fixed_emi_amount", e.target.value)}
-                            className="px-2 py-1 border rounded-lg w-36"
-                          />
-                        </div>
-                      )}
+                      <input
+                        type="number"
+                        placeholder="Fixed EMI Amount (optional)"
+                        value={itemForm.fixed_emi_amount}
+                        onChange={(e) => handleItemChange("fixed_emi_amount", e.target.value)}
+                        className="px-3 py-2 border rounded-lg w-48"
+                      />
                     </div>
                     <div className="flex gap-2">
                       <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                        {editingIeId ? "Update" : "Add"}
+                        {editingItemId ? "Update" : "Add"}
                       </button>
-                      {editingIeId && (
-                        <button type="button" onClick={handleCancelIeEdit} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400">
+                      {editingItemId && (
+                        <button type="button" onClick={handleCancelItemEdit} className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400">
                           Cancel
                         </button>
                       )}
                     </div>
                   </form>
                   {(() => {
-                    const loanExpenses = incomeExpenses.filter((i) => i.ie_type === "expense" && !!i.interest_rate);
-                    const ordered = getOrderedIeItems(loanExpenses);
-                    if (ordered.length === 0) return <p className="text-gray-500 text-center py-4">No loan expenses yet. Add one above.</p>;
+                    const loanItems = items.filter((i) => i.is_loan);
+                    if (loanItems.length === 0) return <p className="text-gray-500 text-center py-4">No loans yet. Add one above.</p>;
                     return (
-                      <DndContext collisionDetection={closestCenter} onDragEnd={(e) => handleIeDragEnd(e, ordered)}>
-                        <SortableContext items={ordered.map((i) => i.id)} strategy={verticalListSortingStrategy}>
-                          <div className="space-y-2">
-                            {ordered.map((ie) => (
-                              <div key={ie.id} className="border rounded-lg p-3">
-                                <SortableIeItem ie={ie} />
+                      <div className="space-y-2">
+                        {loanItems.map((loan) => {
+                          const phase = loan.emi_start_year
+                            ? (loan.emi_end_year ? "Active (scheduled)" : "Active")
+                            : "No EMI";
+                          return (
+                            <div key={loan.id} className="border rounded-lg p-3 flex justify-between items-center">
+                              <div>
+                                <span className="font-medium">{loan.name}</span>
+                                <span className="ml-2 text-sm text-gray-500">₹{loan.loan_balance?.toLocaleString('en-IN') ?? 0}</span>
+                                {loan.interest_rate && <span className="ml-2 text-sm text-gray-500">@{loan.interest_rate}%</span>}
+                                <span className="ml-2 text-xs text-purple-600">{phase}</span>
                               </div>
-                            ))}
-                          </div>
-                        </SortableContext>
-                      </DndContext>
+                              <div className="flex gap-2">
+                                <button
+                                  onClick={() => handleEditItem(loan)}
+                                  className="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    await deleteAssetLiability(loan.id);
+                                    fetchData(true);
+                                  }}
+                                  className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     );
                   })()}
                 </div>
@@ -2112,7 +2188,7 @@ export default function Home() {
                                     onClick={async () => {
                                       if (confirm("Delete this event?")) {
                                         await deleteEvent(event.id);
-                                        fetchData();
+                                        fetchData(true);
                                       }
                                     }}
                                     className="px-3 py-1 text-sm bg-red-100 text-red-700 rounded hover:bg-red-200"
@@ -2236,10 +2312,10 @@ export default function Home() {
                               {imp.target_type === "income" && incomeExpenses.filter(i => i.ie_type === "income").map(i => (
                                 <option key={i.id} value={i.id}>{i.name}</option>
                               ))}
-                              {imp.target_type === "expense" && incomeExpenses.filter(i => i.ie_type === "expense" && !i.interest_rate).map(i => (
+                              {imp.target_type === "expense" && incomeExpenses.filter(i => i.ie_type === "expense" && !i.is_loan).map(i => (
                                 <option key={i.id} value={i.id}>{i.name}</option>
                               ))}
-                              {(imp.target_type === "loan_balance" || imp.target_type === "loan_emi") && incomeExpenses.filter(i => !!i.interest_rate).map(i => (
+                              {(imp.target_type === "loan_balance" || imp.target_type === "loan_emi") && incomeExpenses.filter(i => i.is_loan).map(i => (
                                 <option key={i.id} value={i.id}>{i.name}</option>
                               ))}
                             </select>
@@ -2474,7 +2550,7 @@ export default function Home() {
                   onClick={async () => {
                     if (!sourceMonth) return;
                     const generated = await generateMonths(sourceMonth.month, sourceMonth.year, generateNumMonths);
-                    await fetchData();
+                    await fetchData(true);
                     if (generated.length > 0) {
                       setSelectedMonthTab({ month: generated[0].month, year: generated[0].year });
                     }

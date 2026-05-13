@@ -1,8 +1,8 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
 
 
-class ItemBase(BaseModel):
+class AssetLiabilityBase(BaseModel):
     name: str
     item_type: str
     liquidity: Optional[str] = None
@@ -12,13 +12,28 @@ class ItemBase(BaseModel):
     start_year: Optional[int] = None
     end_month: Optional[int] = None
     end_year: Optional[int] = None
+    loan_balance: Optional[float] = None
+    interest_rate: Optional[float] = None
+    emi_start_month: Optional[int] = None
+    emi_start_year: Optional[int] = None
+    emi_end_month: Optional[int] = None
+    emi_end_year: Optional[int] = None
+    fixed_emi_amount: Optional[float] = None
+    is_loan: bool = False
+
+    @field_validator("is_loan", mode="before")
+    @classmethod
+    def convert_is_loan(cls, v):
+        if isinstance(v, int):
+            return bool(v)
+        return v
 
 
-class ItemCreate(ItemBase):
+class AssetLiabilityCreate(AssetLiabilityBase):
     pass
 
 
-class Item(ItemBase):
+class AssetLiability(AssetLiabilityBase):
     id: str
 
     class Config:
@@ -77,15 +92,8 @@ class IncomeExpenseBase(BaseModel):
     end_month: Optional[int] = None
     end_year: Optional[int] = None
     order: int = 0
-    interest_rate: Optional[float] = None
-    emi_start_month: Optional[int] = None
-    emi_start_year: Optional[int] = None
-    emi_end_month: Optional[int] = None
-    emi_end_year: Optional[int] = None
-    balance_disbursed: Optional[float] = None
     associated_asset_id: Optional[str] = None
-    is_fixed_emi: bool = False
-    fixed_emi_amount: Optional[float] = None
+    is_loan: bool = False
 
 
 class IncomeExpenseCreate(IncomeExpenseBase):
@@ -104,7 +112,8 @@ class IncomeExpenseValueBase(BaseModel):
     year: int
     item_id: str
     value: float
-    balance_outstanding: Optional[float] = None
+    interest_amount: float | None = None
+    principal_amount: float | None = None
 
 
 class IncomeExpenseValueCreate(IncomeExpenseValueBase):

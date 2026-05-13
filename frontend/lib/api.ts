@@ -1,6 +1,6 @@
 const API_BASE = "http://localhost:8000";
 
-export interface Item {
+export interface AssetLiability {
   id: string;
   name: string;
   item_type: string;
@@ -11,6 +11,14 @@ export interface Item {
   start_year: number | null;
   end_month: number | null;
   end_year: number | null;
+  loan_balance: number | null;
+  interest_rate: number | null;
+  emi_start_month: number | null;
+  emi_start_year: number | null;
+  emi_end_month: number | null;
+  emi_end_year: number | null;
+  fixed_emi_amount: number | null;
+  is_loan: boolean;
 }
 
 export interface IncomeExpense {
@@ -25,15 +33,15 @@ export interface IncomeExpense {
   end_month: number | null;
   end_year: number | null;
   order: number;
+  associated_asset_id: string | null;
   interest_rate: number | null;
   emi_start_month: number | null;
   emi_start_year: number | null;
   emi_end_month: number | null;
   emi_end_year: number | null;
-  balance_disbursed: number | null;
-  associated_asset_id: string | null;
-  is_fixed_emi: boolean | null;
+  is_fixed_emi: boolean;
   fixed_emi_amount: number | null;
+  is_loan: boolean;
 }
 
 export interface Summary {
@@ -56,13 +64,13 @@ export interface Snapshot {
   year: number;
 }
 
-export async function getItems(): Promise<Item[]> {
-  const res = await fetch(`${API_BASE}/items`);
+export async function getAssetsLiabilities(): Promise<AssetLiability[]> {
+  const res = await fetch(`${API_BASE}/assets-liabilities`);
   return res.json();
 }
 
-export async function createItem(item: Omit<Item, "id">): Promise<Item> {
-  const res = await fetch(`${API_BASE}/items`, {
+export async function createAssetLiability(item: Omit<AssetLiability, "id">): Promise<AssetLiability> {
+  const res = await fetch(`${API_BASE}/assets-liabilities`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(item),
@@ -70,12 +78,12 @@ export async function createItem(item: Omit<Item, "id">): Promise<Item> {
   return res.json();
 }
 
-export async function deleteItem(id: string): Promise<void> {
-  await fetch(`${API_BASE}/items/${id}`, { method: "DELETE" });
+export async function deleteAssetLiability(id: string): Promise<void> {
+  await fetch(`${API_BASE}/assets-liabilities/${id}`, { method: "DELETE" });
 }
 
-export async function updateItem(id: string, item: Omit<Item, "id">): Promise<Item> {
-  const res = await fetch(`${API_BASE}/items/${id}`, {
+export async function updateAssetLiability(id: string, item: Omit<AssetLiability, "id">): Promise<AssetLiability> {
+  const res = await fetch(`${API_BASE}/assets-liabilities/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(item),
@@ -182,26 +190,6 @@ export async function saveIncomeExpenseValues(
   });
 }
 
-export async function getLoanOutstandingBalances(
-  month: number,
-  year: number
-): Promise<Record<string, number>> {
-  const res = await fetch(`${API_BASE}/loan-outstanding-balance/${month}/${year}`);
-  return res.json();
-}
-
-export async function saveLoanOutstandingBalances(
-  month: number,
-  year: number,
-  balances: Record<string, number>
-): Promise<void> {
-  await fetch(`${API_BASE}/loan-outstanding-balance/${month}/${year}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(balances),
-  });
-}
-
 export interface GeneratedMonth {
   month: number;
   year: number;
@@ -265,4 +253,12 @@ export async function updateEvent(id: string, event: Omit<Event, "id">): Promise
 
 export async function deleteEvent(id: string): Promise<void> {
   await fetch(`${API_BASE}/events/${id}`, { method: "DELETE" });
+}
+
+export async function applyEvent(eventId: string): Promise<void> {
+  await fetch(`${API_BASE}/events/${eventId}/apply`, { method: "POST" });
+}
+
+export async function regenerateAll(): Promise<void> {
+  await fetch(`${API_BASE}/regenerate-all`, { method: "POST" });
 }

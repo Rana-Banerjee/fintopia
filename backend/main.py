@@ -1220,14 +1220,22 @@ def _regenerate_single_month(
         )
 
         if is_pre_emi:
-            new_ie_values[ie_item.id] = interest
+            new_ie_values[ie_item.id] = {
+                "value": interest,
+                "interest_amount": interest,
+                "principal_amount": 0,
+            }
             print(f"[IE-Loan-{ie_item.name}] PRE-EMI: value={interest} (interest only)")
         elif is_active_emi:
             emi = loan.fixed_emi_amount or 0
             principal = max(0, emi - interest)
-            new_ie_values[ie_item.id] = principal
+            new_ie_values[ie_item.id] = {
+                "value": interest + principal,
+                "interest_amount": interest,
+                "principal_amount": principal,
+            }
             print(
-                f"[IE-Loan-{ie_item.name}] ACTIVE-EMI: emi={emi}, principal={principal}, value={principal}"
+                f"[IE-Loan-{ie_item.name}] ACTIVE-EMI: emi={emi}, principal={principal}, value={interest + principal}"
             )
 
     # Then process regular IE items
@@ -1343,6 +1351,15 @@ def _regenerate_single_month(
 
     print(f"[Persist] Saving {len(new_ie_values)} IE values for {tgt_m}/{tgt_y}")
     for item_id, value in new_ie_values.items():
+        if isinstance(value, dict):
+            ie_value = value.get("value")
+            ie_interest = value.get("interest_amount")
+            ie_principal = value.get("principal_amount")
+        else:
+            ie_value = value
+            ie_interest = None
+            ie_principal = None
+
         existing = (
             db.query(IncomeExpenseValueModel)
             .filter(
@@ -1355,15 +1372,26 @@ def _regenerate_single_month(
             .first()
         )
         if existing:
-            existing.value = value
-            print(f"[Persist] IE {item_id}: updated value={value}")
+            existing.value = ie_value
+            existing.interest_amount = ie_interest
+            existing.principal_amount = ie_principal
+            print(
+                f"[Persist] IE {item_id}: updated value={ie_value}, interest={ie_interest}, principal={ie_principal}"
+            )
         else:
             db.add(
                 IncomeExpenseValueModel(
-                    month=tgt_m, year=tgt_y, item_id=item_id, value=value
+                    month=tgt_m,
+                    year=tgt_y,
+                    item_id=item_id,
+                    value=ie_value,
+                    interest_amount=ie_interest,
+                    principal_amount=ie_principal,
                 )
             )
-            print(f"[Persist] IE {item_id}: inserted new value={value}")
+            print(
+                f"[Persist] IE {item_id}: inserted new value={ie_value}, interest={ie_interest}, principal={ie_principal}"
+            )
 
     print(f"[Persist] Committing to database...")
     db.commit()

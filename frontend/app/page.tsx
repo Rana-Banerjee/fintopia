@@ -82,6 +82,7 @@ export default function Home() {
   const [snapshots, setSnapshots] = useState<Snapshot[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [chartSummaries, setChartSummaries] = useState<Summary[]>([]);
+  const [dashboardLoading, setDashboardLoading] = useState(false);
 
   const [incomeExpenses, setIncomeExpenses] = useState<IncomeExpense[]>([]);
   const [ieForm, setIeForm] = useState({
@@ -242,34 +243,41 @@ export default function Home() {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   async function fetchData(regenerate: boolean = false) {
-    if (regenerate) {
-      await regenerateAll();
-    }
-    const [itemsData, snapshotsData, ieData, eventsData] = await Promise.all([
-      getAssetsLiabilities(),
-      getSnapshots(),
-      getIncomeExpenses(),
-      getEvents(),
-    ]);
-    setItems(itemsData);
-    setSnapshots(snapshotsData);
-    setIncomeExpenses(ieData);
-    setEvents(eventsData);
+    if (dashboardLoading) return;
+    
+    setDashboardLoading(true);
+    try {
+      if (regenerate) {
+        await regenerateAll();
+      }
+      const [itemsData, snapshotsData, ieData, eventsData] = await Promise.all([
+        getAssetsLiabilities(),
+        getSnapshots(),
+        getIncomeExpenses(),
+        getEvents(),
+      ]);
+      setItems(itemsData);
+      setSnapshots(snapshotsData);
+      setIncomeExpenses(ieData);
+      setEvents(eventsData);
 
-    const summaries = await Promise.all(
-      snapshotsData.map((s) => getSummary(s.month, s.year))
-    );
-    setChartSummaries(summaries);
+      const summaries = await Promise.all(
+        snapshotsData.map((s) => getSummary(s.month, s.year))
+      );
+      setChartSummaries(summaries);
 
-    if (itemsData.length === 0 && !settingsOpen) {
-      setSettingsOpen(true);
-    }
+      if (itemsData.length === 0 && !settingsOpen) {
+        setSettingsOpen(true);
+      }
 
-    if (selectedMonthTab) {
-      loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
-      loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
-    } else if (snapshotsData.length > 0) {
-      setSelectedMonthTab(snapshotsData[0]);
+      if (selectedMonthTab) {
+        await loadMonthValues(selectedMonthTab.month, selectedMonthTab.year);
+        loadIeValues(selectedMonthTab.month, selectedMonthTab.year);
+      } else if (snapshotsData.length > 0) {
+        setSelectedMonthTab(snapshotsData[0]);
+      }
+    } finally {
+      setDashboardLoading(false);
     }
   }
 
@@ -283,28 +291,33 @@ export default function Home() {
   }
 
   async function loadMonthValues(month: number, year: number) {
-    const values = await getMonthValues(month, year);
-    const valueMap: Record<string, number> = {};
-    values.forEach((v) => {
-      valueMap[v.item_id] = v.value;
-    });
-
-    if (Object.keys(valueMap).length === 0 && items.length > 0) {
-      const prevMonth = month === 1 ? 12 : month - 1;
-      const prevYear = month === 1 ? year - 1 : year;
-      const prevValues = await getMonthValues(prevMonth, prevYear);
-      const prevValueMap: Record<string, number> = {};
-      prevValues.forEach((v) => {
-        prevValueMap[v.item_id] = v.value;
+    setDashboardLoading(true);
+    try {
+      const values = await getMonthValues(month, year);
+      const valueMap: Record<string, number> = {};
+      values.forEach((v) => {
+        valueMap[v.item_id] = v.value;
       });
-      setMonthValues(prevValueMap);
-    } else {
-      setMonthValues(valueMap);
-    }
 
-    const summaryData = await getSummary(month, year);
-    setSummary(summaryData);
-    setHasChanges(false);
+      if (Object.keys(valueMap).length === 0 && items.length > 0) {
+        const prevMonth = month === 1 ? 12 : month - 1;
+        const prevYear = month === 1 ? year - 1 : year;
+        const prevValues = await getMonthValues(prevMonth, prevYear);
+        const prevValueMap: Record<string, number> = {};
+        prevValues.forEach((v) => {
+          prevValueMap[v.item_id] = v.value;
+        });
+        setMonthValues(prevValueMap);
+      } else {
+        setMonthValues(valueMap);
+      }
+
+      const summaryData = await getSummary(month, year);
+      setSummary(summaryData);
+      setHasChanges(false);
+    } finally {
+      setDashboardLoading(false);
+    }
   }
 
   function handleItemChange(
@@ -1121,6 +1134,14 @@ export default function Home() {
 
 {activeTab === "dashboard" && (
           <div className="space-y-6">
+            {dashboardLoading && (
+              <div className="fixed inset-0 bg-white/80 backdrop-blur-sm z-50 flex items-center justify-center">
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-16 w-16 border-4 border-blue-600 border-t-transparent mx-auto mb-4"></div>
+                  <div className="text-lg font-semibold text-gray-700">Loading...</div>
+                </div>
+              </div>
+            )}
             {snapshots.length > 0 && (
               <div className="bg-white p-4 rounded-lg shadow">
                   <button
@@ -1208,7 +1229,7 @@ export default function Home() {
               >
                 Add Event
               </button>
-              {hasChanges && (
+              {hasChanges && !dashboardLoading && (
                 <div className="flex items-center gap-2">
                   <button
                     onClick={handleSaveMonthValues}
@@ -1324,14 +1345,22 @@ export default function Home() {
                     }`}
                   >
                     <button
-                      onClick={() => setSelectedMonthTab(s)}
-                      className="px-2 py-1"
+                      onClick={() => {
+                        if (dashboardLoading) return;
+                        setSelectedMonthTab(s);
+                      }}
+                      className={`px-2 py-1 ${dashboardLoading ? 'cursor-not-allowed opacity-50' : ''}`}
+                      disabled={dashboardLoading}
                     >
                       {s.month}/{s.year}
                     </button>
                     <button
-                      onClick={() => handleDeleteSnapshot(s.month, s.year)}
-                      className="text-xs hover:text-red-500"
+                      onClick={() => {
+                        if (dashboardLoading) return;
+                        handleDeleteSnapshot(s.month, s.year);
+                      }}
+                      className={`text-xs hover:text-red-500 ${dashboardLoading ? 'cursor-not-allowed opacity-50' : ''}`}
+                      disabled={dashboardLoading}
                     >
                       ×
                     </button>

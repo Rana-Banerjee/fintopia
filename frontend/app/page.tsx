@@ -199,6 +199,7 @@ export default function Home() {
     emi_end_month: "",
     emi_end_year: "",
     fixed_emi_amount: "",
+    associated_asset_id: "",
   });
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
 
@@ -357,6 +358,7 @@ export default function Home() {
       emi_end_year: itemForm.emi_end_year ? parseInt(itemForm.emi_end_year) : null,
       fixed_emi_amount: itemForm.fixed_emi_amount ? parseFloat(itemForm.fixed_emi_amount) : null,
       is_loan: settingsTab === "loans",
+      associated_asset_id: itemForm.associated_asset_id ? itemForm.associated_asset_id : null,
     };
 
     if (editingItemId !== null) {
@@ -383,6 +385,7 @@ export default function Home() {
         emi_end_month: "",
         emi_end_year: "",
         fixed_emi_amount: "",
+        associated_asset_id: "",
       });
     }
     fetchData(true);
@@ -412,6 +415,7 @@ export default function Home() {
       emi_end_month: item.emi_end_month?.toString() || "",
       emi_end_year: item.emi_end_year?.toString() || "",
       fixed_emi_amount: item.fixed_emi_amount?.toString() || "",
+      associated_asset_id: item.associated_asset_id || "",
     });
   }
 
@@ -436,6 +440,7 @@ export default function Home() {
       emi_end_month: "",
       emi_end_year: "",
       fixed_emi_amount: "",
+      associated_asset_id: "",
     });
   }
 
@@ -1672,7 +1677,7 @@ export default function Home() {
                     <button
                       onClick={() => {
                         setEditingItemId(null);
-                        setItemForm({ name: "", item_type: "asset", liquidity: "liquid", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "", loan_balance: "", interest_rate: "", emi_start_month: "", emi_start_year: "", emi_end_month: "", emi_end_year: "", fixed_emi_amount: "" });
+                        setItemForm({ name: "", item_type: "asset", liquidity: "liquid", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "", loan_balance: "", interest_rate: "", emi_start_month: "", emi_start_year: "", emi_end_month: "", emi_end_year: "", fixed_emi_amount: "", associated_asset_id: "" });
                       }}
                       className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
                     >
@@ -1773,7 +1778,7 @@ export default function Home() {
                     <button
                       onClick={() => {
                         setEditingItemId(null);
-                        setItemForm({ name: "", item_type: "liability", liquidity: "fixed", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "", loan_balance: "", interest_rate: "", emi_start_month: "", emi_start_year: "", emi_end_month: "", emi_end_year: "", fixed_emi_amount: "" });
+                        setItemForm({ name: "", item_type: "liability", liquidity: "fixed", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "", loan_balance: "", interest_rate: "", emi_start_month: "", emi_start_year: "", emi_end_month: "", emi_end_year: "", fixed_emi_amount: "", associated_asset_id: "" });
                       }}
                       className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
                     >
@@ -2030,7 +2035,7 @@ export default function Home() {
                     <button
                       onClick={() => {
                         setEditingItemId(null);
-                        setItemForm({ name: "", item_type: "liability", liquidity: "fixed", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "", loan_balance: "0", interest_rate: "", emi_start_month: "", emi_start_year: "", emi_end_month: "", emi_end_year: "", fixed_emi_amount: "" });
+                        setItemForm({ name: "", item_type: "liability", liquidity: "fixed", appreciation_rate: "", appreciation_frequency: "monthly", start_month: "", start_year: "", end_month: "", end_year: "", loan_balance: "0", interest_rate: "", emi_start_month: "", emi_start_year: "", emi_end_month: "", emi_end_year: "", fixed_emi_amount: "", associated_asset_id: "" });
                       }}
                       className="px-3 py-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm"
                     >
@@ -2077,6 +2082,16 @@ export default function Home() {
                         onChange={(e) => handleItemChange("fixed_emi_amount", e.target.value)}
                         className="px-3 py-2 border rounded-lg w-48"
                       />
+                      <select
+                        value={itemForm.associated_asset_id}
+                        onChange={(e) => handleItemChange("associated_asset_id", e.target.value)}
+                        className="px-3 py-2 border rounded-lg w-48"
+                      >
+                        <option value="">Deduct EMI from asset (optional)</option>
+                        {items.filter((i) => i.item_type === "asset" && i.liquidity === "liquid" && !i.is_loan && i.id !== editingItemId).map((asset) => (
+                          <option key={asset.id} value={asset.id}>{asset.name}</option>
+                        ))}
+                      </select>
                     </div>
                     <div className="flex gap-2">
                       <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">

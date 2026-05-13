@@ -19,6 +19,7 @@ export interface AssetLiability {
   emi_end_year: number | null;
   fixed_emi_amount: number | null;
   is_loan: boolean;
+  associated_asset_id: string | null;
 }
 
 export interface IncomeExpense {

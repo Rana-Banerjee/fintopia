@@ -24,8 +24,14 @@ class AssetLiability(Base):
     emi_end_year = Column(Integer, nullable=True)
     fixed_emi_amount = Column(Float, nullable=True)
     is_loan = Column(Boolean, default=False)
+    associated_asset_id = Column(
+        String, ForeignKey("assets_liabilities.id"), nullable=True
+    )
 
     values = relationship("MonthValue", back_populates="item")
+    associated_asset = relationship(
+        "AssetLiability", foreign_keys=[associated_asset_id]
+    )
 
 
 class MonthValue(Base):

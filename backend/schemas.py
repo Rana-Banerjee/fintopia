@@ -20,6 +20,7 @@ class AssetLiabilityBase(BaseModel):
     emi_end_year: Optional[int] = None
     fixed_emi_amount: Optional[float] = None
     is_loan: bool = False
+    associated_asset_id: Optional[str] = None
 
     @field_validator("is_loan", mode="before")
     @classmethod
